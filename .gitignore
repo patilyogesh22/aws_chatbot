@@ -1,0 +1,89 @@
+# ==========================
+# Python
+# ==========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ==========================
+# Virtual Environments
+# ==========================
+venv/
+myvenv/
+.env/
+.venv/
+
+# ==========================
+# Environment Variables
+# ==========================
+.env
+.env.*
+!.env.example
+
+# ==========================
+# Vector Store
+# ==========================
+vector_store/
+chroma_db/
+faiss_index/
+
+# ==========================
+# DBT
+# ==========================
+dbt_chatbot/logs/
+dbt_chatbot/target/
+dbt_chatbot/dbt_packages/
+
+# ==========================
+# Docker
+# ==========================
+docker/logs/
+docker/.env.backup
+
+# Optional:
+# Ignore local DBT profiles containing passwords
+docker/profiles.yml
+aws/profiles.yml
+
+# ==========================
+# Logs
+# ==========================
+logs/
+*.log
+
+# ==========================
+# IDE
+# ==========================
+.vscode/
+.idea/
+
+# ==========================
+# OS Files
+# ==========================
+.DS_Store
+Thumbs.db
+
+# ==========================
+# Testing / Coverage
+# ==========================
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ==========================
+# Jupyter
+# ==========================
+.ipynb_checkpoints/
+
+# ==========================
+# Build Artifacts
+# ==========================
+build/
+dist/
+*.egg-info/
+
+# ==========================
+# Temporary Files
+# ==========================
+*.tmp
+*.temp

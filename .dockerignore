@@ -1,0 +1,12 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv
+vector_store
+data
+.dbt
+.git
+*.log
+node_modules
