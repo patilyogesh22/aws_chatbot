@@ -32,7 +32,6 @@ RUN pip install -r requirements-ml.txt
 # ─────────────────────────────────────────────
 COPY app/ app/
 COPY aws/ aws/
-COPY aws/profiles.yml /app/aws/profiles.yml
 COPY dbt_chatbot/ dbt_chatbot/
 COPY frontend/ frontend/
 COPY *.py ./
