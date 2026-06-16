@@ -1,30 +1,7 @@
 version: "3.9"
 
 services:
-# ── PostgreSQL + pgvector ─────────────────────────────
-#  this is used when we use docker postgresql for storage but now we use AWS RDS as database
-#  postgres:
-#    image: pgvector/pgvector:pg16
-#    container_name: postgres
-#    restart: unless-stopped
-#
-#    environment:
-#      POSTGRES_DB: ${PG_DB}
-#      POSTGRES_USER: ${PG_USER}
-#      POSTGRES_PASSWORD: ${PG_PASSWORD}
-#
-#    {# ports: #}
-#      - "5433:5432"
-#
-#    volumes:
-#      - pg_data:/var/lib/postgresql/data
-#      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
-#    healthcheck:
-#      test: ["CMD-SHELL", "pg_isready -U ${PG_USER}"]
-#      interval: 5s
-#      timeout: 5s
-#      retries: 10
 
   # ── FastAPI Backend ──────────────────────────────────
   api:
@@ -44,9 +21,9 @@ services:
       - ../data:/app/data
       - ../vector_store:/app/vector_store
       - ../dbt_chatbot:/app/dbt_chatbot
-      - ./profiles.yml:/root/.dbt/profiles.yml
+      - ~/.dbt:/root/.dbt
 
-    restart: unless-stopped
+    restart: always
 
 
   # ── Streamlit Frontend ───────────────────────────────
@@ -77,4 +54,4 @@ services:
     depends_on:
       - api
 
-    restart: unless-stopped
+    restart: always

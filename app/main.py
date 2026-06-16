@@ -260,7 +260,7 @@ def run_dbt():
 def _run_dbt():
     try:
         result = subprocess.run(
-            ["dbt", "build", "--profiles-dir", "/root/.dbt"],
+            ["dbt", "build"],
             cwd=DBT_PROJECT_DIR,
             capture_output=True,
             text=True,
