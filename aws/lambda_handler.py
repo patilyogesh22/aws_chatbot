@@ -21,64 +21,49 @@ def get_conn():
         port=PG_PORT
     )
 
-
 def lambda_handler(event, context):
 
     try:
-
         for record in event["Records"]:
 
             bucket = record["s3"]["bucket"]["name"]
-
             key = record["s3"]["object"]["key"]
-
             size = record["s3"]["object"].get("size", 0)
 
             file_name = key.split("/")[-1]
 
             with get_conn() as conn:
                 with conn.cursor() as cur:
-
-                    cur.execute(
-                        """
+                    cur.execute("""
                         INSERT INTO file_upload_events
-                        (
-                            file_name,
-                            s3_key,
-                            bucket_name,
-                            file_size
-                        )
+                        (file_name, s3_key, bucket_name, file_size)
                         VALUES (%s,%s,%s,%s)
-                        """,
-                        (
-                            file_name,
-                            key,
-                            bucket,
-                            size
-                        )
-                    )
+                    """, (file_name, key, bucket, size))
 
                 conn.commit()
 
-            try:
-                response = glue.start_crawler(Name=CRAWLER_NAME)
-                print("Crawler start response:", response)
+            print(f"Stored metadata for {file_name}")
 
-            except glue.exceptions.CrawlerRunningException:
-                print("Crawler already running")
+        # 👇 RUN CRAWLER ONCE AFTER ALL RECORDS
+        try:
+            print("Triggering crawler:", CRAWLER_NAME)
+            response = glue.start_crawler(Name=CRAWLER_NAME)
+            print("Crawler response:", response)
 
-            except Exception as e:
-                print("FAILED to start crawler:", str(e))
-                raise e
+        except glue.exceptions.CrawlerRunningException:
+            print("Crawler already running")
+
+        except Exception as e:
+            print("Crawler error:", str(e))
+            raise e
+
         return {
             "statusCode": 200,
             "body": json.dumps("success")
         }
 
     except Exception as e:
-
-        print(str(e))
-
+        print("Lambda error:", str(e))
         return {
             "statusCode": 500,
             "body": str(e)
