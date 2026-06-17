@@ -39,7 +39,7 @@ jobs:
           cd aws/lambda_s3_trigger
           rm -rf package lambda.zip
           mkdir package
-          pip install -r requirements.txt -t package
+          pip install -r requirements-lambda.txt -t package
           cp lambda_handler.py package/
           cd package
           zip -r ../lambda.zip .
