@@ -3,8 +3,14 @@ import os
 import psycopg2
 import boto3
 
+# -------------------------
+# AWS CLIENT
+# -------------------------
 glue = boto3.client("glue")
 
+# -------------------------
+# ENV VARIABLES
+# -------------------------
 PG_HOST = os.getenv("PG_HOST")
 PG_DB = os.getenv("PG_DB")
 PG_USER = os.getenv("PG_USER")
@@ -14,6 +20,9 @@ PG_PORT = os.getenv("PG_PORT", "5432")
 CRAWLER_NAME = "chatbot-crawler"
 
 
+# -------------------------
+# DB CONNECTION
+# -------------------------
 def get_conn():
     return psycopg2.connect(
         host=PG_HOST,
@@ -24,9 +33,19 @@ def get_conn():
     )
 
 
+# -------------------------
+# LAMBDA HANDLER
+# -------------------------
 def lambda_handler(event, context):
 
+    print("🚀 EVENT RECEIVED:")
+    print(json.dumps(event))
+
     try:
+
+        # -------------------------
+        # PROCESS S3 RECORDS
+        # -------------------------
         for record in event["Records"]:
 
             bucket = record["s3"]["bucket"]["name"]
@@ -35,38 +54,55 @@ def lambda_handler(event, context):
 
             file_name = key.split("/")[-1]
 
+            print(f"📄 Processing file: {file_name}")
+
+            # -------------------------
+            # INSERT INTO POSTGRES
+            # -------------------------
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
                         INSERT INTO file_upload_events
                         (file_name, s3_key, bucket_name, file_size)
-                        VALUES (%s,%s,%s,%s)
+                        VALUES (%s, %s, %s, %s)
                     """, (file_name, key, bucket, size))
 
                 conn.commit()
 
-            print(f"Stored metadata for {file_name}")
+            print(f"✅ Stored metadata for {file_name}")
 
-        # run crawler ONCE
+        # -------------------------
+        # START GLUE CRAWLER (ONCE)
+        # -------------------------
+        print("👉 BEFORE STARTING CRAWLER:", CRAWLER_NAME)
+
         try:
-            print("Starting crawler:", CRAWLER_NAME)
             response = glue.start_crawler(Name=CRAWLER_NAME)
-            print("Crawler response:", response)
+
+            print("✅ CRAWLER STARTED SUCCESSFULLY")
+            print("📦 RESPONSE:", json.dumps(response, default=str))
 
         except glue.exceptions.CrawlerRunningException:
-            print("Crawler already running")
+            print("⚠️ CRAWLER already running, skipping start")
 
         except Exception as e:
-            print("Crawler error:", str(e))
+            print("❌ CRAWLER ERROR:", str(e))
             raise e
 
+        print("👉 AFTER CRAWLER CALL COMPLETED")
+
+        # -------------------------
+        # RESPONSE
+        # -------------------------
         return {
             "statusCode": 200,
             "body": json.dumps("success")
         }
 
     except Exception as e:
-        print("Lambda error:", str(e))
+
+        print("❌ LAMBDA ERROR:", str(e))
+
         return {
             "statusCode": 500,
             "body": str(e)
