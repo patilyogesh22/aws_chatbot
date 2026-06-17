@@ -37,14 +37,27 @@ jobs:
       - name: Build Lambda zip
         run: |
           cd aws/lambda_s3_trigger
+
           rm -rf package lambda.zip
           mkdir package
-          pip install -r requirements-lambda.txt -t package
+
+          python -m pip install --upgrade pip
+
+          pip install \
+            --platform manylinux2014_x86_64 \
+            --target package \
+            --implementation cp \
+            --python-version 3.11 \
+            --only-binary=:all: \
+            -r requirements-lambda.txt
+
           cp lambda_handler.py package/
+
           cd package
           zip -r ../lambda.zip .
           cd ..
-          unzip -l lambda.zip
+
+          unzip -l lambda.zip | head -50
 
       - name: Deploy Lambda
         run: |
