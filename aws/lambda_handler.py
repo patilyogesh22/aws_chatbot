@@ -60,13 +60,16 @@ def lambda_handler(event, context):
 
                 conn.commit()
 
-            print(f"Stored metadata for {file_name}")
             try:
-                glue.start_crawler(Name=CRAWLER_NAME)
-                print(f"Crawler {CRAWLER_NAME} started")
+                response = glue.start_crawler(Name=CRAWLER_NAME)
+                print("Crawler start response:", response)
+
             except glue.exceptions.CrawlerRunningException:
                 print("Crawler already running")
 
+            except Exception as e:
+                print("FAILED to start crawler:", str(e))
+                raise e
         return {
             "statusCode": 200,
             "body": json.dumps("success")
