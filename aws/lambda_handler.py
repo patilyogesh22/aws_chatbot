@@ -3,12 +3,14 @@ import os
 import psycopg2
 import boto3
 
+glue = boto3.client("glue")
+
 PG_HOST = os.getenv("PG_HOST")
 PG_DB = os.getenv("PG_DB")
 PG_USER = os.getenv("PG_USER")
 PG_PASSWORD = os.getenv("PG_PASSWORD")
 PG_PORT = os.getenv("PG_PORT", "5432")
-
+CRAWLER_NAME = "chatbot-crawler"
 
 def get_conn():
     return psycopg2.connect(
@@ -59,6 +61,11 @@ def lambda_handler(event, context):
                 conn.commit()
 
             print(f"Stored metadata for {file_name}")
+            try:
+                glue.start_crawler(Name=CRAWLER_NAME)
+                print(f"Crawler {CRAWLER_NAME} started")
+            except glue.exceptions.CrawlerRunningException:
+                print("Crawler already running")
 
         return {
             "statusCode": 200,
