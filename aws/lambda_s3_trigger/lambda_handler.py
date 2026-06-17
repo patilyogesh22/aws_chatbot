@@ -74,13 +74,15 @@ def lambda_handler(event, context):
         # -------------------------
         # START GLUE CRAWLER (ONCE)
         # -------------------------
+        
         print("👉 BEFORE STARTING CRAWLER:", CRAWLER_NAME)
 
         try:
+            print("Checking crawler...")
+            response = glue.get_crawler(Name=CRAWLER_NAME)
+            print("Crawler state:", response["Crawler"]["State"])
             response = glue.start_crawler(Name=CRAWLER_NAME)
-
-            print("✅ CRAWLER STARTED SUCCESSFULLY")
-            print("📦 RESPONSE:", json.dumps(response, default=str))
+            print("Crawler started")
 
         except glue.exceptions.CrawlerRunningException:
             print("⚠️ CRAWLER already running, skipping start")
