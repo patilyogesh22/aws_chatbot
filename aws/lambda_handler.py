@@ -10,7 +10,9 @@ PG_DB = os.getenv("PG_DB")
 PG_USER = os.getenv("PG_USER")
 PG_PASSWORD = os.getenv("PG_PASSWORD")
 PG_PORT = os.getenv("PG_PORT", "5432")
+
 CRAWLER_NAME = "chatbot-crawler"
+
 
 def get_conn():
     return psycopg2.connect(
@@ -20,6 +22,7 @@ def get_conn():
         password=PG_PASSWORD,
         port=PG_PORT
     )
+
 
 def lambda_handler(event, context):
 
@@ -44,9 +47,9 @@ def lambda_handler(event, context):
 
             print(f"Stored metadata for {file_name}")
 
-        # 👇 RUN CRAWLER ONCE AFTER ALL RECORDS
+        # run crawler ONCE
         try:
-            print("Triggering crawler:", CRAWLER_NAME)
+            print("Starting crawler:", CRAWLER_NAME)
             response = glue.start_crawler(Name=CRAWLER_NAME)
             print("Crawler response:", response)
 
