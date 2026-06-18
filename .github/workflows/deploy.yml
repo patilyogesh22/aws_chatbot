@@ -1,99 +1,98 @@
 name: Deploy to EC2 and Lambda
-
 on:
-push:
-branches:
-- main
+  push:
+    branches:
+      - main
 
 jobs:
-deploy:
-runs-on: ubuntu-latest
-steps:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
 
-  - name: Checkout code
-    uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  # ---------------------------------------
-  # Run PostgreSQL migrations
-  # ---------------------------------------
-  - name: Install PostgreSQL client
-    run: |
-      sudo apt-get update
-      sudo apt-get install -y postgresql-client
+      # ---------------------------------------
+      # Run PostgreSQL migrations
+      # ---------------------------------------
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
 
-  - name: Run DB Migrations
-    env:
-      PGPASSWORD: ${{ secrets.DB_PASSWORD }}
-    run: |
-      psql \
-        -h ${{ secrets.DB_HOST }} \
-        -U ${{ secrets.DB_USER }} \
-        -d ${{ secrets.DB_NAME }} \
-        -f migrations/001_auth_tables.sql
+      - name: Run DB Migrations
+        env:
+          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          psql \
+            -h ${{ secrets.DB_HOST }} \
+            -U ${{ secrets.DB_USER }} \
+            -d ${{ secrets.DB_NAME }} \
+            -f migrations/001_auth_tables.sql
 
-  # ---------------------------------------
-  # Deploy EC2
-  # ---------------------------------------
-  - name: Deploy to EC2 via SSH
-    uses: appleboy/ssh-action@v1.0.3
-    with:
-      host: ${{ secrets.EC2_HOST }}
-      username: ${{ secrets.EC2_USER }}
-      key: ${{ secrets.EC2_KEY }}
-      script: |
-        cd ~/aws_chatbot
+      # ---------------------------------------
+      # Deploy EC2
+      # ---------------------------------------
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            cd ~/aws_chatbot
 
-        git fetch origin main
-        git reset --hard origin/main
+            git fetch origin main
+            git reset --hard origin/main
 
-        cd docker
+            cd docker
 
-        docker compose down
-        docker compose up -d --build
+            docker compose down
+            docker compose up -d --build
 
-  # ---------------------------------------
-  # AWS Credentials
-  # ---------------------------------------
-  - name: Configure AWS credentials
-    uses: aws-actions/configure-aws-credentials@v4
-    with:
-      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      aws-region: ${{ secrets.AWS_REGION }}
+      # ---------------------------------------
+      # AWS Credentials
+      # ---------------------------------------
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-  # ---------------------------------------
-  # Build Lambda Package
-  # ---------------------------------------
-  - name: Build Lambda zip
-    run: |
-      cd aws/lambda_s3_trigger
+      # ---------------------------------------
+      # Build Lambda Package
+      # ---------------------------------------
+      - name: Build Lambda zip
+        run: |
+          cd aws/lambda_s3_trigger
 
-      rm -rf package lambda.zip
-      mkdir package
+          rm -rf package lambda.zip
+          mkdir package
 
-      python -m pip install --upgrade pip
+          python -m pip install --upgrade pip
 
-      pip install \
-        --platform manylinux2014_x86_64 \
-        --target package \
-        --implementation cp \
-        --python-version 3.11 \
-        --only-binary=:all: \
-        -r requirements-lambda.txt
+          pip install \
+            --platform manylinux2014_x86_64 \
+            --target package \
+            --implementation cp \
+            --python-version 3.11 \
+            --only-binary=:all: \
+            -r requirements-lambda.txt
 
-      cp lambda_handler.py package/
+          cp lambda_handler.py package/
 
-      cd package
-      zip -r ../lambda.zip .
-      cd ..
+          cd package
+          zip -r ../lambda.zip .
+          cd ..
 
-      unzip -l lambda.zip | head -50
+          unzip -l lambda.zip | head -50
 
-  # ---------------------------------------
-  # Deploy Lambda
-  # ---------------------------------------
-  - name: Deploy Lambda
-    run: |
-      aws lambda update-function-code \
-        --function-name chatbot-s3-trigger \
-        --zip-file fileb://aws/lambda_s3_trigger/lambda.zip
+      # ---------------------------------------
+      # Deploy Lambda
+      # ---------------------------------------
+      - name: Deploy Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name chatbot-s3-trigger \
+            --zip-file fileb://aws/lambda_s3_trigger/lambda.zip
