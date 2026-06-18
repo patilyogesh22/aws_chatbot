@@ -1,10 +1,11 @@
 import json
 import os
+import re
 import psycopg2
 import boto3
 
 # -------------------------
-# AWS CLIENT
+# AWS CLIENTS
 # -------------------------
 glue = boto3.client("glue")
 
@@ -34,18 +35,29 @@ def get_conn():
 
 
 # -------------------------
+# EXTRACT USER ID
+# uploads/user_1/file.csv
+# -------------------------
+def extract_user_id(key: str):
+
+    match = re.search(r"uploads/user_(\d+)/", key)
+
+    if match:
+        return int(match.group(1))
+
+    return None
+
+
+# -------------------------
 # LAMBDA HANDLER
 # -------------------------
 def lambda_handler(event, context):
 
-    print("🚀 EVENT RECEIVED:")
+    print("🚀 EVENT RECEIVED")
     print(json.dumps(event))
 
     try:
 
-        # -------------------------
-        # PROCESS S3 RECORDS
-        # -------------------------
         for record in event["Records"]:
 
             bucket = record["s3"]["bucket"]["name"]
@@ -54,48 +66,77 @@ def lambda_handler(event, context):
 
             file_name = key.split("/")[-1]
 
+            user_id = extract_user_id(key)
+
             print(f"📄 Processing file: {file_name}")
+            print(f"👤 User ID: {user_id}")
 
             # -------------------------
-            # INSERT INTO POSTGRES
+            # STORE METADATA
             # -------------------------
             with get_conn() as conn:
                 with conn.cursor() as cur:
+
                     cur.execute("""
                         INSERT INTO file_upload_events
-                        (file_name, s3_key, bucket_name, file_size)
-                        VALUES (%s, %s, %s, %s)
-                    """, (file_name, key, bucket, size))
+                        (
+                            user_id,
+                            file_name,
+                            s3_key,
+                            bucket_name,
+                            file_size
+                        )
+                        VALUES (%s,%s,%s,%s,%s)
+                    """, (
+                        user_id,
+                        file_name,
+                        key,
+                        bucket,
+                        size
+                    ))
 
                 conn.commit()
 
             print(f"✅ Stored metadata for {file_name}")
 
         # -------------------------
-        # START GLUE CRAWLER (ONCE)
+        # START GLUE CRAWLER
         # -------------------------
-        
-        print("👉 BEFORE STARTING CRAWLER:", CRAWLER_NAME)
-
         try:
+
             print("Checking crawler...")
-            response = glue.get_crawler(Name=CRAWLER_NAME)
-            print("Crawler state:", response["Crawler"]["State"])
-            response = glue.start_crawler(Name=CRAWLER_NAME)
-            print("Crawler started")
+
+            crawler = glue.get_crawler(
+                Name=CRAWLER_NAME
+            )
+
+            state = crawler["Crawler"]["State"]
+
+            print("Crawler state:", state)
+
+            if state == "READY":
+
+                glue.start_crawler(
+                    Name=CRAWLER_NAME
+                )
+
+                print("Crawler started")
+
+            else:
+
+                print("Crawler already running")
 
         except glue.exceptions.CrawlerRunningException:
-            print("⚠️ CRAWLER already running, skipping start")
+
+            print("Crawler already running")
 
         except Exception as e:
-            print("❌ CRAWLER ERROR:", str(e))
+
+            print("Glue error:", str(e))
             raise e
 
-        print("👉 AFTER CRAWLER CALL COMPLETED")
+        print("Lambda completed")
 
-        # -------------------------
-        # RESPONSE
-        # -------------------------
         return {
             "statusCode": 200,
             "body": json.dumps("success")
@@ -103,7 +144,7 @@ def lambda_handler(event, context):
 
     except Exception as e:
 
-        print("❌ LAMBDA ERROR:", str(e))
+        print("Lambda error:", str(e))
 
         return {
             "statusCode": 500,

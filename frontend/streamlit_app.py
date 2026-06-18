@@ -19,6 +19,8 @@ st.set_page_config(
 
 # ── Session state ─────────────────────────────────────────────────────────────
 for k, v in {
+    "token":         None,
+    "user":          None,
     "messages":      [],
     "selected_file": None,
     "show_chunks":   False,
@@ -702,19 +704,125 @@ def ext_icon(name):
     return {"PDF":"📕","DOCX":"📘","TXT":"📄","CSV":"📊",
             "XLSX":"📗","JSON":"🗂","PPTX":"📙","MD":"📝"}.get(e, "📄")
 
+def auth_headers():
+    if st.session_state.token:
+        return {"Authorization": f"Bearer {st.session_state.token}"}
+    return {}
+
 def api_get(path):
-    try: return requests.get(f"{API_URL}{path}", timeout=8).json()
-    except: return {}
+    try:
+        return requests.get(
+            f"{API_URL}{path}",
+            headers=auth_headers(),
+            timeout=8
+        ).json()
+    except Exception as e:
+        return {"error": str(e)}
 
 def api_post(path, **kw):
     try:
-        r = requests.post(f"{API_URL}{path}", timeout=120, **kw)
+        headers = kw.pop("headers", {})
+        headers.update(auth_headers())
+        r = requests.post(
+            f"{API_URL}{path}",
+            headers=headers,
+            timeout=120,
+            **kw
+        )
         return r.json(), r.status_code
-    except Exception as e: return {"error": str(e)}, 500
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 def api_delete(path):
-    try: return requests.delete(f"{API_URL}{path}", timeout=10).json()
-    except Exception as e: return {"error": str(e)}
+    try:
+        return requests.delete(
+            f"{API_URL}{path}",
+            headers=auth_headers(),
+            timeout=10
+        ).json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def load_chat_history():
+    """
+    Load saved backend chat history for current user into Streamlit session.
+    """
+    data = api_get("/history")
+    history = data.get("history", [])
+    messages = []
+
+    for item in reversed(history[-20:]):
+        q = item.get("question", "")
+        a = item.get("answer", "")
+        ts = fmt_dt(item.get("created_at", ""))
+
+        if q:
+            messages.append({"role": "user", "content": q, "ts": ts})
+        if a:
+            messages.append({
+                "role": "assistant",
+                "content": a,
+                "ts": ts,
+                "sources": [item.get("file_name")] if item.get("file_name") else [],
+                "chunks": [],
+                "model": "",
+            })
+
+    st.session_state.messages = messages
+
+# ── Auth screen ────────────────────────────────────────────────────────────────
+if not st.session_state.token:
+    st.markdown("""
+<div class="page-header">
+  <h1>🔐 Login to DocChat</h1>
+  <p>Please login or register to access your private documents and chat history.</p>
+</div>
+""", unsafe_allow_html=True)
+
+    login_tab, register_tab = st.tabs(["Login", "Register"])
+
+    with login_tab:
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+
+        if st.button("Login", type="primary", use_container_width=True):
+            data, status = api_post("/auth/login-json", json={
+                "email": email,
+                "password": password
+            })
+
+            if status == 200:
+                st.session_state.token = data["access_token"]
+                st.session_state.user = data["user"]
+                st.session_state.messages = []
+                load_chat_history()
+                st.success("Login successful")
+                st.rerun()
+            else:
+                st.error(data.get("detail", "Login failed"))
+
+    with register_tab:
+        name = st.text_input("Name", key="reg_name")
+        reg_email = st.text_input("Email", key="reg_email")
+        reg_password = st.text_input("Password", type="password", key="reg_password")
+
+        if st.button("Register", type="primary", use_container_width=True):
+            data, status = api_post("/auth/register", json={
+                "name": name,
+                "email": reg_email,
+                "password": reg_password
+            })
+
+            if status == 200:
+                st.session_state.token = data["access_token"]
+                st.session_state.user = data["user"]
+                st.session_state.messages = []
+                st.success("Registration successful")
+                st.rerun()
+            else:
+                st.error(data.get("detail", "Registration failed"))
+
+    st.stop()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -726,6 +834,28 @@ with st.sidebar:
   <div class="brand-sub">RAG · Groq · dbt</div>
 </div>
 """, unsafe_allow_html=True)
+
+    # Current user + logout
+    if st.session_state.user:
+        st.markdown(f"""
+<div class="status-bar">
+  <span class="dot-ok"></span>
+  <span style="color:var(--text-secondary)">Logged in as {st.session_state.user.get('name', '')}</span>
+</div>
+""", unsafe_allow_html=True)
+
+    c_logout1, c_logout2 = st.columns(2)
+    with c_logout1:
+        if st.button("↻ History", type="secondary", use_container_width=True):
+            load_chat_history()
+            st.rerun()
+    with c_logout2:
+        if st.button("Logout", type="secondary", use_container_width=True):
+            st.session_state.token = None
+            st.session_state.user = None
+            st.session_state.messages = []
+            st.session_state.selected_file = None
+            st.rerun()
 
     # Theme toggle
     c1, c2 = st.columns(2)
@@ -754,7 +884,7 @@ with st.sidebar:
 </div>
 <div class="stats-row">
   <div class="stat-pill">
-    <div class="stat-val">{stats.get('total_files', 0)}</div>
+    <div class="stat-val">{stats.get('pg_files', stats.get('total_files', 0))}</div>
     <div class="stat-lbl">Files</div>
   </div>
   <div class="stat-pill">
@@ -792,7 +922,7 @@ with st.sidebar:
                     else:
                         st.error(data.get("detail", "Upload failed"))
                 else:
-                    st.error(data.get("error", "Server error"))
+                    st.error(data.get("detail", data.get("error", "Server error")))
 
     # File list
     st.markdown('<div class="section-label">Documents</div>', unsafe_allow_html=True)
