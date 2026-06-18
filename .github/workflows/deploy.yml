@@ -1,4 +1,5 @@
 name: Deploy to EC2 and Lambda
+
 on:
   push:
     branches:
@@ -7,31 +8,13 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    steps:
 
+    steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       # ---------------------------------------
-      # Run PostgreSQL migrations
-      # ---------------------------------------
-      - name: Install PostgreSQL client
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
-
-      - name: Run DB Migrations
-        env:
-          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
-        run: |
-          psql \
-            -h ${{ secrets.DB_HOST }} \
-            -U ${{ secrets.DB_USER }} \
-            -d ${{ secrets.DB_NAME }} \
-            -f migrations/001_auth_tables.sql
-
-      # ---------------------------------------
-      # Deploy EC2
+      # Deploy EC2 + Run DB Migration from EC2
       # ---------------------------------------
       - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -44,6 +27,14 @@ jobs:
 
             git fetch origin main
             git reset --hard origin/main
+
+            export PGPASSWORD='${{ secrets.DB_PASSWORD }}'
+
+            psql \
+              -h ${{ secrets.DB_HOST }} \
+              -U ${{ secrets.DB_USER }} \
+              -d ${{ secrets.DB_NAME }} \
+              -f migrations/001_auth_tables.sql
 
             cd docker
 
