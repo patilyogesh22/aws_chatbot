@@ -229,11 +229,6 @@ async def upload_file(
             return {
                 "status": "success",
                 "file_type": "structured",
-                "message": (
-                    "Structured file uploaded to S3. "
-                    "Lambda/Glue Crawler will process it. "
-                    "Next phase: Glue Job → RDS → dbt → SQL analytics."
-                ),
                 "file": original_filename,
                 "file_size": file_size,
                 "chunks": 0,

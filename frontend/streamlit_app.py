@@ -920,7 +920,6 @@ with st.sidebar:
 
                         if file_type == "structured":
                             st.success(f"✓ Structured file uploaded: {data.get('file')}")
-                            st.info("This file is routed to S3 → Glue Crawler → Glue/RDS/dbt pipeline.")
                         elif file_type == "unstructured":
                             st.success(
                                 f"✓ Unstructured file ingested · "

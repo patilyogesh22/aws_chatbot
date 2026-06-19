@@ -168,13 +168,13 @@ def lambda_handler(event, context):
             # Start crawler only for structured files
             if file_type == "structured":
                 should_start_crawler = True
-                job_run_id, output_path = start_glue_job(
-                bucket=bucket,
-                key=key,
-                user_id=user_id,
-                file_name=file_name,
-                file_type=file_type
-            )
+            #     job_run_id, output_path = start_glue_job(
+            #     bucket=bucket,
+            #     key=key,
+            #     user_id=user_id,
+            #     file_name=file_name,
+            #     file_type=file_type
+            # )
 
         # -------------------------
         # START GLUE CRAWLER ONLY FOR STRUCTURED FILES
