@@ -82,3 +82,32 @@ jobs:
           aws lambda update-function-code \
             --function-name chatbot-s3-trigger \
             --zip-file fileb://aws/lambda_s3_trigger/lambda.zip
+      
+      - name: Build Start Glue Job Lambda zip
+        run: |
+          cd aws/lambda_start_glue_job
+
+          rm -rf package lambda.zip
+          mkdir package
+
+          python -m pip install --upgrade pip
+
+          pip install \
+            --platform manylinux2014_x86_64 \
+            --target package \
+            --implementation cp \
+            --python-version 3.11 \
+            --only-binary=:all: \
+            -r requirements-lambda.txt
+
+          cp lambda_handler.py package/
+
+          cd package
+          zip -r ../lambda.zip .
+          cd ..
+
+      - name: Deploy Start Glue Job Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name lambda_start_glue_job \
+            --zip-file fileb://aws/lambda_start_glue_job/lambda.zip

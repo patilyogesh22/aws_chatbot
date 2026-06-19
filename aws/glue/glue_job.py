@@ -1,9 +1,9 @@
 import sys
 import re
-from urllib.parse import urlparse
 
+from awsglue.context import GlueContext
 from awsglue.utils import getResolvedOptions
-from pyspark.sql import SparkSession
+from pyspark.context import SparkContext
 from pyspark.sql.functions import col, trim, current_timestamp, lit
 
 
@@ -11,60 +11,40 @@ args = getResolvedOptions(
     sys.argv,
     [
         "JOB_NAME",
-        "S3_INPUT_PATH",
+        "DATABASE_NAME",
+        "TABLE_NAME",
         "S3_OUTPUT_PATH",
         "USER_ID",
         "DOCUMENT_ID",
-        "FILE_NAME",
-        "FILE_TYPE"
+        "FILE_NAME"
     ]
 )
 
-spark = SparkSession.builder.appName(args["JOB_NAME"]).getOrCreate()
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
 
-input_path = args["S3_INPUT_PATH"]
+database_name = args["DATABASE_NAME"]
+table_name = args["TABLE_NAME"]
 output_path = args["S3_OUTPUT_PATH"]
-
 user_id = args["USER_ID"]
 document_id = args["DOCUMENT_ID"]
 file_name = args["FILE_NAME"]
-file_type = args["FILE_TYPE"].lower()
 
 
-def clean_column_name(name: str) -> str:
-    name = name.strip().lower()
+def clean_column_name(name):
+    name = str(name).strip().lower()
     name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
     name = re.sub(r"_+", "_", name)
     return name.strip("_")
 
 
-def read_structured_file(path: str, file_type: str):
-    if file_type == "csv":
-        return (
-            spark.read
-            .option("header", "true")
-            .option("inferSchema", "true")
-            .csv(path)
-        )
+dyf = glueContext.create_dynamic_frame.from_catalog(
+    database=database_name,
+    table_name=table_name
+)
 
-    if file_type == "json":
-        return (
-            spark.read
-            .option("multiLine", "true")
-            .json(path)
-        )
-
-    if file_type == "parquet":
-        return spark.read.parquet(path)
-
-    raise Exception(
-        f"Unsupported file type for Glue job: {file_type}. "
-        "Currently supported: csv, json, parquet. "
-        "For xlsx, convert to csv before Glue or add spark-excel dependency."
-    )
-
-
-df = read_structured_file(input_path, file_type)
+df = dyf.toDF()
 
 for old_col in df.columns:
     df = df.withColumnRenamed(old_col, clean_column_name(old_col))
@@ -82,10 +62,8 @@ df = df.withColumn("processed_at", current_timestamp())
 
 df.write.mode("overwrite").parquet(output_path)
 
-print("Glue structured ETL completed successfully")
-print("Input path:", input_path)
-print("Output path:", output_path)
-print("User ID:", user_id)
-print("Document ID:", document_id)
-print("File name:", file_name)
+print("Glue ETL from Data Catalog completed successfully")
+print("Database:", database_name)
+print("Table:", table_name)
+print("Output:", output_path)
 print("Rows processed:", df.count())
