@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from app.config import DATA_RAW_DIR, DBT_PROJECT_DIR, PG_DSN
 from aws.s3_ingestion import upload_fileobj_to_s3, delete_s3_object
 from app.file_classifier import classify_file
-
+from pathlib import Path
 from app.auth import (
     router as auth_router,
     get_current_user,
@@ -155,7 +155,9 @@ async def upload_file(
                     )
 
         # Upload to user-specific S3 prefix
-        s3_prefix = f"uploads/user_{current_user['id']}/{file_type}/"
+        dataset_name = Path(file.filename).stem.lower().replace(" ", "_")
+
+        s3_prefix = f"uploads/user_{current_user['id']}/{file_type}/{dataset_name}/"
 
         s3_result = upload_fileobj_to_s3(
             file_obj=file.file,

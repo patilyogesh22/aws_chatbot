@@ -30,11 +30,7 @@ jobs:
 
             export PGPASSWORD='${{ secrets.DB_PASSWORD }}'
 
-            psql \
-              -h ${{ secrets.DB_HOST }} \
-              -U ${{ secrets.DB_USER }} \
-              -d ${{ secrets.DB_NAME }} \
-              -f migrations/
+            python3 migrations/run_migrations.py
             
             cd docker
 
