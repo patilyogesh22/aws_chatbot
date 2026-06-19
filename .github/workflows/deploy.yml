@@ -34,13 +34,8 @@ jobs:
               -h ${{ secrets.DB_HOST }} \
               -U ${{ secrets.DB_USER }} \
               -d ${{ secrets.DB_NAME }} \
-              -f migrations/001_auth_tables.sql
-            psql \
-              -h ${{ secrets.DB_HOST }} \
-              -U ${{ secrets.DB_USER }} \
-              -d ${{ secrets.DB_NAME }} \
-              -f migrations/002_file_type.sql
-
+              -f migrations/
+            
             cd docker
 
             docker compose down

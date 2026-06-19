@@ -203,6 +203,27 @@ async def upload_file(
         # STRUCTURED FILE PIPELINE
         # CSV / XLSX / XLS / JSON
         if file_type == "structured":
+            with psycopg2.connect(PG_DSN) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO structured_datasets
+                        (
+                            user_id,
+                            document_id,
+                            file_name,
+                            raw_s3_key,
+                            status
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (
+                        current_user["id"],
+                        document_id,
+                        original_filename,
+                        s3_key,
+                        "uploaded"
+                    ))
+
+                conn.commit()
             return {
                 "status": "success",
                 "file_type": "structured",

@@ -21,8 +21,7 @@ PG_PASSWORD = os.getenv("PG_PASSWORD")
 PG_PORT = os.getenv("PG_PORT", "5432")
 
 CRAWLER_NAME = os.getenv("CRAWLER_NAME", "chatbot-crawler")
-
-
+GLUE_JOB_NAME = os.getenv("GLUE_JOB_NAME", "structured-file-etl-job")
 # -------------------------
 # DB CONNECTION
 # -------------------------
@@ -169,6 +168,13 @@ def lambda_handler(event, context):
             # Start crawler only for structured files
             if file_type == "structured":
                 should_start_crawler = True
+                job_run_id, output_path = start_glue_job(
+                bucket=bucket,
+                key=key,
+                user_id=user_id,
+                file_name=file_name,
+                file_type=file_type
+            )
 
         # -------------------------
         # START GLUE CRAWLER ONLY FOR STRUCTURED FILES
@@ -196,3 +202,41 @@ def lambda_handler(event, context):
             "statusCode": 500,
             "body": str(e)
         }
+
+
+def get_file_extension(file_name: str):
+    return Path(file_name).suffix.lower().replace(".", "")
+
+
+def file_name_without_ext(file_name: str):
+    return Path(file_name).stem
+
+def start_glue_job(bucket, key, user_id, file_name, file_type):
+    file_ext = get_file_extension(file_name)
+    clean_name = file_name_without_ext(file_name)
+
+    output_path = (
+        f"s3://{bucket}/processed/user_{user_id}/structured/{clean_name}/"
+    )
+
+    input_path = f"s3://{bucket}/{key}"
+
+    print("Starting Glue Job...")
+    print("Input:", input_path)
+    print("Output:", output_path)
+
+    response = glue.start_job_run(
+        JobName=GLUE_JOB_NAME,
+        Arguments={
+            "--S3_INPUT_PATH": input_path,
+            "--S3_OUTPUT_PATH": output_path,
+            "--USER_ID": str(user_id),
+            "--DOCUMENT_ID": "0",
+            "--FILE_NAME": file_name,
+            "--FILE_TYPE": file_ext
+        }
+    )
+
+    print("Glue Job started:", response["JobRunId"])
+
+    return response["JobRunId"], output_path
