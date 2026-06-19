@@ -903,7 +903,7 @@ with st.sidebar:
     with st.container():
         uploaded = st.file_uploader(
             "Drop a file or click to browse",
-            type=["pdf","docx","txt","csv","xlsx","json","pptx","md"],
+            type=["pdf","docx","txt","csv","xlsx","xls","json","pptx","md"],
             label_visibility="collapsed",
         )
 
@@ -916,7 +916,19 @@ with st.sidebar:
                 st.write("DATA:", data)
                 if status == 200:
                     if data.get("status") == "success":
-                        st.success(f"✓ Ingested · {data.get('chunks', '?')} chunks")
+                        file_type = data.get("file_type", "unknown")
+
+                        if file_type == "structured":
+                            st.success(f"✓ Structured file uploaded: {data.get('file')}")
+                            st.info("This file is routed to S3 → Glue Crawler → Glue/RDS/dbt pipeline.")
+                        elif file_type == "unstructured":
+                            st.success(
+                                f"✓ Unstructured file ingested · "
+                                f"{data.get('chunks', 0)} chunks · "
+                                f"{data.get('embedded', 0)} embeddings"
+                            )
+                        else:
+                            st.success(f"✓ Uploaded: {data.get('file')}")
                     elif data.get("status") == "duplicate":
                         st.warning("Already ingested — skipped.")
                     else:
@@ -930,7 +942,16 @@ with st.sidebar:
     files_resp = api_get("/files")
     files      = files_resp.get("files", [])
     if files and isinstance(files[0], str):
-        files = [{"name": f, "chunks": "?", "size": 0, "uploaded_at": None} for f in files]
+        files = [
+            {
+                "name": f,
+                "file_type": "unknown",
+                "chunks": "?",
+                "size": 0,
+                "uploaded_at": None
+            }
+            for f in files
+        ]
 
     if files:
         file_names = [f["name"] for f in files]
@@ -952,25 +973,36 @@ with st.sidebar:
 
         # Render cards below the radio for visual feedback
         for f in files:
-            icon    = ext_icon(f["name"])
-            is_sel  = f["name"] == st.session_state.selected_file
-            cls     = "file-card active" if is_sel else "file-card"
-            chunks  = f.get("chunks", "?")
-            size    = fmt_size(f.get("size", 0))
-            upd     = fmt_dt(f.get("uploaded_at", ""))
+            icon = ext_icon(f["name"])
+            is_sel = f["name"] == st.session_state.selected_file
+            cls = "file-card active" if is_sel else "file-card"
+
+            chunks = f.get("chunks", "?")
+            size = fmt_size(f.get("size", 0))
+            upd = fmt_dt(f.get("uploaded_at", ""))
+            file_type = f.get("file_type", "unknown")
+
+            if file_type == "structured":
+                type_badge = "📊 structured"
+            elif file_type == "unstructured":
+                type_badge = "📄 unstructured"
+            else:
+                type_badge = "❔ unknown"
+
             st.markdown(f"""
-<div class="{cls}">
-  <div class="file-card-row">
-    <span class="file-icon">{icon}</span>
-    <span class="file-name">{f['name']}</span>
-    <span class="file-badge">{chunks}c</span>
-  </div>
-  <div class="file-meta">
-    <span>{size}</span>
-    <span>{upd}</span>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+        <div class="{cls}">
+        <div class="file-card-row">
+            <span class="file-icon">{icon}</span>
+            <span class="file-name">{f['name']}</span>
+            <span class="file-badge">{type_badge}</span>
+        </div>
+        <div class="file-meta">
+            <span>{chunks} chunks</span>
+            <span>{size}</span>
+            <span>{upd}</span>
+        </div>
+        </div>
+        """, unsafe_allow_html=True)
 
         # Delete
         st.markdown('<div class="section-label">Remove Document</div>', unsafe_allow_html=True)

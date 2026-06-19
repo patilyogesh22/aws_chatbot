@@ -25,16 +25,15 @@ def sanitize_filename(filename: str) -> str:
     filename = re.sub(r"[^A-Za-z0-9._-]", "_", filename)
     return filename
 
-
 def upload_fileobj_to_s3(file_obj, filename: str, prefix: str = "uploads/"):
     """
     Upload file object directly to S3.
 
     Example prefix:
-        uploads/user_1/
+        uploads/user_1/unstructured/
 
     Final key:
-        uploads/user_1/<uuid>_file.csv
+        uploads/user_1/unstructured/Dbt_notes.pdf
     """
 
     if not BUCKET:
@@ -44,7 +43,9 @@ def upload_fileobj_to_s3(file_obj, filename: str, prefix: str = "uploads/"):
         prefix += "/"
 
     safe_filename = sanitize_filename(filename)
-    key = f"{prefix}{uuid.uuid4()}_{safe_filename}"
+
+    # No UUID because duplicate check is already done using file_hash + user_id
+    key = f"{prefix}{safe_filename}"
 
     file_obj.seek(0)
 
@@ -80,7 +81,7 @@ def upload_file_to_s3(file_path: str, prefix: str = "uploads/"):
     s3 = get_s3_client()
 
     filename = sanitize_filename(os.path.basename(file_path))
-    key = f"{prefix}{uuid.uuid4()}_{filename}"
+    key = f"{prefix}{filename}"
 
     s3.upload_file(
         Filename=file_path,
@@ -102,3 +103,19 @@ def get_s3_url(key: str):
     """
     encoded_key = quote(key)
     return f"https://{BUCKET}.s3.{AWS_REGION}.amazonaws.com/{encoded_key}"
+
+def delete_s3_object(s3_key: str):
+    """
+    Delete file from S3 bucket using s3_key.
+    """
+    if not BUCKET:
+        raise ValueError("S3_BUCKET environment variable not set")
+
+    s3 = get_s3_client()
+
+    s3.delete_object(
+        Bucket=BUCKET,
+        Key=s3_key
+    )
+
+    print(f"[s3] Deleted object: {s3_key}")
