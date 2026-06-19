@@ -49,7 +49,7 @@ from app.embeddings import (
 from app.retriever import retrieve, build_context
 from app.llm import answer
 
-
+from app.structured_converter import convert_excel_to_csv
 app = FastAPI(
     title="RAG Chatbot API Authenticated",
     version="3.1.0"
@@ -159,11 +159,46 @@ async def upload_file(
 
         s3_prefix = f"uploads/user_{current_user['id']}/{file_type}/{dataset_name}/"
 
-        s3_result = upload_fileobj_to_s3(
-            file_obj=file.file,
-            filename=file.filename,
-            prefix=s3_prefix
-        )
+        upload_obj = file.file
+        upload_filename = file.filename
+
+        temp_csv_path = None
+
+        if file_type == "structured":
+
+            ext = os.path.splitext(
+                file.filename
+            )[1].lower()
+
+            if ext in [".xlsx", ".xls"]:
+
+                temp_csv_path, upload_filename = (
+                    convert_excel_to_csv(
+                        file.file,
+                        file.filename
+                    )
+                )
+
+                upload_obj = open(
+                    temp_csv_path,
+                    "rb"
+                )
+
+        try:
+
+            s3_result = upload_fileobj_to_s3(
+                file_obj=upload_obj,
+                filename=upload_filename,
+                prefix=s3_prefix
+            )
+
+        finally:
+
+            if upload_obj is not file.file:
+                upload_obj.close()
+
+            if temp_csv_path:
+                os.remove(temp_csv_path)
 
         s3_key = s3_result["s3_key"]
         original_filename = s3_result["original_filename"]
