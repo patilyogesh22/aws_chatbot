@@ -34,6 +34,7 @@ COPY app/ app/
 COPY aws/ aws/
 COPY dbt_chatbot/ dbt_chatbot/
 COPY frontend/ frontend/
+COPY migrations/ migrations/
 COPY *.py ./
 
 # ─────────────────────────────────────────────

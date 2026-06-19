@@ -30,12 +30,11 @@ jobs:
 
             export PGPASSWORD='${{ secrets.DB_PASSWORD }}'
 
-            python3 migrations/run_migrations.py
-            
             cd docker
 
             docker compose down
             docker compose up -d --build
+            docker compose exec -T api python migrations/run_migrations.py
 
       # ---------------------------------------
       # AWS Credentials
