@@ -2,60 +2,40 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# ─────────────────────────────────────────────
-# System dependencies (minimal + required only)
-# ─────────────────────────────────────────────
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     libffi-dev \
     libssl-dev \
     git \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# ─────────────────────────────────────────────
-# Copy requirements first (for caching)
-# ─────────────────────────────────────────────
-ENV PIP_NO_BUILD_ISOLATION=1
-RUN pip install --upgrade pip
-RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
 COPY requirements-core.txt .
-RUN pip install -r requirements-core.txt
-
 COPY requirements-ml.txt .
-RUN pip install -r requirements-ml.txt
 
+RUN pip install --no-cache-dir --upgrade pip
 
-# ─────────────────────────────────────────────
-# Copy ONLY necessary project files
-# (important for fast builds)
-# ─────────────────────────────────────────────
-COPY app/ app/
-COPY aws/ aws/
-COPY dbt_chatbot/ dbt_chatbot/
-COPY frontend/ frontend/
-COPY migrations/ migrations/
-COPY *.py ./
+RUN pip install --no-cache-dir -r requirements-core.txt
+RUN pip install --no-cache-dir -r requirements-ml.txt
 
-# ─────────────────────────────────────────────
-# Create required runtime directories
-# ─────────────────────────────────────────────
-RUN mkdir -p data/raw data/processed vector_store
+COPY app ./app
+COPY aws ./aws
+COPY dbt_chatbot ./dbt_chatbot
+COPY migrations ./migrations
 
-# ─────────────────────────────────────────────
-# IMPORTANT FIX:
-# DO NOT download ML model during build ❌
-# It makes build slow (you had this issue)
-# ─────────────────────────────────────────────
+RUN mkdir -p \
+    data/raw \
+    data/processed \
+    vector_store \
+    logs
 
-# Model will load at runtime automatically
-
-# ─────────────────────────────────────────────
-# Expose FastAPI port
-# ─────────────────────────────────────────────
 EXPOSE 8000
 
-# ─────────────────────────────────────────────
-# Run app
-# ─────────────────────────────────────────────
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+CMD curl -f http://localhost:8000/health || exit 1
+
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

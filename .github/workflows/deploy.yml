@@ -95,6 +95,29 @@ jobs:
             --function-name chatbot-run-dbt-after-glue \
             --zip-file fileb://aws/lambda_run_dbt_after_glue/lambda.zip
 
+
+      - name: Update Run DBT Lambda Environment
+        run: |
+          aws lambda update-function-configuration \
+            --function-name chatbot-run-dbt-after-glue \
+            --environment "Variables={
+              API_URL='${{ secrets.API_URL }}',
+              INTERNAL_API_KEY='${{ secrets.INTERNAL_API_KEY }}',
+              GLUE_JOB_NAME='structured-file-etl-job'
+            }"
+
+      - name: Update S3 Trigger Lambda Environment
+        run: |
+          aws lambda update-function-configuration \
+            --function-name chatbot-s3-trigger \
+            --environment "Variables={
+              PG_HOST='${{ secrets.PG_HOST }}',
+              PG_DB='${{ secrets.PG_DB }}',
+              PG_USER='${{ secrets.PG_USER }}',
+              PG_PASSWORD='${{ secrets.PG_PASSWORD }}',
+              PG_PORT='5432',
+              GLUE_JOB_NAME='structured-file-etl-job'
+            }"
       # ---------------------------------------
       # Deploy EC2 + Run DB Migrations
       # ---------------------------------------
@@ -111,7 +134,7 @@ jobs:
             git reset --hard origin/main
 
             cd docker
-
+            docker system prune -f
             docker compose down
             docker compose up -d --build
 

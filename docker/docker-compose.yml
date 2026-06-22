@@ -48,6 +48,7 @@ services:
 
     volumes:
       - ../frontend:/app/frontend
+      - ../streamlit_cache:/root/.streamlit
 
     depends_on:
       - api

@@ -1,5 +1,5 @@
 """
-main.py — FastAPI backend with Authentication + User-wise RAG + File Type Routing
+main.py — FastAPI backend with Authentication + User-wise RAG + Structured NL-to-SQL
 
 Pipeline:
 Login/Register
@@ -7,7 +7,8 @@ Login/Register
 → Detect file type
     ├── structured: CSV / XLSX / XLS / JSON
     │       → S3 uploads/user_{id}/structured/file.csv
-    │       → Lambda S3 trigger → Glue Job → RDS → dbt → SQL/NL-to-SQL
+    │       → Lambda S3 trigger → Glue Job → RDS
+    │       → NL-to-SQL structured chat
     └── unstructured: PDF / DOCX / TXT / MD / PPTX
             → S3 → Text extraction → raw_chunks with user_id
             → dbt → ChromaDB embeddings with user_id
@@ -20,13 +21,14 @@ import subprocess
 from typing import Optional
 
 import psycopg2
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.config import DATA_RAW_DIR, DBT_PROJECT_DIR, PG_DSN
 from aws.s3_ingestion import upload_fileobj_to_s3, delete_s3_object
 from app.file_classifier import classify_file
+
 from app.auth import (
     router as auth_router,
     get_current_user,
@@ -47,11 +49,15 @@ from app.embeddings import (
 
 from app.retriever import retrieve, build_context
 from app.llm import answer
-
 from app.structured_converter import convert_excel_to_csv
+from app.structured_chat import answer_structured_question
+
+
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+
 app = FastAPI(
     title="RAG Chatbot API Authenticated",
-    version="3.1.0"
+    version="3.2.0"
 )
 
 app.include_router(auth_router)
@@ -73,11 +79,11 @@ def startup():
     init_postgres()
 
 
-@app.get("/1")
+@app.get("/")
 def root():
     return {
-        "message": "Authenticated RAG Chatbot API running 🚀",
-        "version": "3.1.0"
+        "message": "Authenticated RAG + Structured SQL Chatbot API running 🚀",
+        "version": "3.2.0"
     }
 
 
@@ -134,7 +140,6 @@ async def upload_file(
         if not s3_bucket:
             raise HTTPException(status_code=500, detail="S3_BUCKET not set")
 
-        # Duplicate check per user
         with psycopg2.connect(PG_DSN) as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -153,46 +158,30 @@ async def upload_file(
                         status_code=400,
                         detail="Duplicate file already uploaded by this user"
                     )
-        # Upload to user-specific S3 prefix.
-        # Structured file example: uploads/user_1/structured/sales_data.csv
-        # Unstructured file example: uploads/user_1/unstructured/policy.pdf
+
         s3_prefix = f"uploads/user_{current_user['id']}/{file_type}/"
 
         upload_obj = file.file
         upload_filename = file.filename
-
         temp_csv_path = None
 
         if file_type == "structured":
-
-            ext = os.path.splitext(
-                file.filename
-            )[1].lower()
+            ext = os.path.splitext(file.filename)[1].lower()
 
             if ext in [".xlsx", ".xls"]:
-
-                temp_csv_path, upload_filename = (
-                    convert_excel_to_csv(
-                        file.file,
-                        file.filename
-                    )
+                temp_csv_path, upload_filename = convert_excel_to_csv(
+                    file.file,
+                    file.filename
                 )
-
-                upload_obj = open(
-                    temp_csv_path,
-                    "rb"
-                )
+                upload_obj = open(temp_csv_path, "rb")
 
         try:
-
             s3_result = upload_fileobj_to_s3(
                 file_obj=upload_obj,
                 filename=upload_filename,
                 prefix=s3_prefix
             )
-
         finally:
-
             if upload_obj is not file.file:
                 upload_obj.close()
 
@@ -202,13 +191,11 @@ async def upload_file(
         s3_key = s3_result["s3_key"]
         original_filename = s3_result["original_filename"]
 
-        # Re-check after filename sanitization
         file_type = classify_file(original_filename)
 
         if file_type == "unknown":
             raise HTTPException(status_code=400, detail="Unsupported file type after upload")
 
-        # Store metadata for BOTH structured and unstructured files
         with psycopg2.connect(PG_DSN) as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -236,8 +223,6 @@ async def upload_file(
 
             conn.commit()
 
-        # STRUCTURED FILE PIPELINE
-        # CSV / XLSX / XLS / JSON
         if file_type == "structured":
             with psycopg2.connect(PG_DSN) as conn:
                 with conn.cursor() as cur:
@@ -260,24 +245,20 @@ async def upload_file(
                     ))
 
                 conn.commit()
+
             return {
                 "status": "success",
                 "file_type": "structured",
-                "message": (
-                    "Structured file uploaded successfully. "
-                    "S3 trigger Lambda will start the Glue Job directly."
-                ),
+                "message": "Structured file uploaded successfully. Lambda will start Glue Job.",
                 "file": original_filename,
                 "s3_key": s3_key,
                 "file_size": file_size,
                 "chunks": 0,
                 "embedded": 0,
-                "next_step": "Lambda → Glue Job → RDS → dbt",
-                "dbt_status": "Skipped now. Run dbt after Glue Job loads data into RDS."
+                "next_step": "Lambda → Glue Job → RDS → NL-to-SQL",
+                "dbt_status": "Skipped for structured file upload"
             }
 
-        # UNSTRUCTURED FILE PIPELINE
-        # PDF / DOCX / TXT / MD / PPTX
         chunks = ingest_file_from_s3_key(
             bucket=s3_bucket,
             s3_key=s3_key,
@@ -327,7 +308,6 @@ def chat(
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
-    # Selected structured file: no Chroma embeddings yet
     if req.file_name:
         with psycopg2.connect(PG_DSN) as conn:
             with conn.cursor() as cur:
@@ -344,16 +324,49 @@ def chat(
                 row = cur.fetchone()
 
         if row and row[0] == "structured":
-            return {
-                "answer": (
-                    "This is a structured file. It has been routed to the Glue/RDS/dbt pipeline. "
-                    "Structured question answering will be handled by the SQL/NL-to-SQL engine in the next phase."
-                ),
-                "chunks": [],
-                "sources": [req.file_name],
-                "chunks_used": 0,
-                "file_type": "structured"
-            }
+            try:
+                structured_response = answer_structured_question(
+                    user_id=current_user["id"],
+                    file_name=req.file_name,
+                    question=req.question,
+                )
+
+                with psycopg2.connect(PG_DSN) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            INSERT INTO chat_history
+                            (
+                                user_id,
+                                question,
+                                answer,
+                                file_name,
+                                generated_sql,
+                                table_name,
+                                file_type
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            current_user["id"],
+                            req.question,
+                            structured_response["answer"],
+                            req.file_name,
+                            structured_response.get("sql"),
+                            structured_response.get("table_name"),
+                            "structured",
+                        ))
+
+                    conn.commit()
+
+                return structured_response
+
+            except Exception as e:
+                return {
+                    "answer": f"Structured file query failed: {str(e)}",
+                    "chunks": [],
+                    "sources": [req.file_name],
+                    "chunks_used": 0,
+                    "file_type": "structured"
+                }
 
     chunks = retrieve(
         req.question,
@@ -364,7 +377,7 @@ def chat(
 
     if not chunks:
         return {
-            "answer": "No relevant documents found for your account. Please upload an unstructured file first.",
+            "answer": "No relevant documents found for your account. Please upload a file first.",
             "chunks": [],
             "sources": [],
             "chunks_used": 0,
@@ -381,14 +394,16 @@ def chat(
                     user_id,
                     question,
                     answer,
-                    file_name
+                    file_name,
+                    file_type
                 )
-                VALUES (%s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s)
             """, (
                 current_user["id"],
                 req.question,
                 response,
-                req.file_name
+                req.file_name,
+                "unstructured",
             ))
 
         conn.commit()
@@ -407,10 +422,6 @@ def chat(
 
 @app.get("/files")
 def list_files(current_user: dict = Depends(get_current_user)):
-    """
-    Return all files uploaded by the logged-in user.
-    Includes both structured and unstructured files.
-    """
     try:
         with psycopg2.connect(PG_DSN) as conn:
             with conn.cursor() as cur:
@@ -464,7 +475,6 @@ def delete_file(
     file_name: str,
     current_user: dict = Depends(get_current_user)
 ):
-    # get document info first
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -485,22 +495,12 @@ def delete_file(
 
     document_id, file_type, s3_key = doc
 
-    # delete raw chunks and embeddings for unstructured file
-    delete_file_chunks(
-        current_user["id"],
-        file_name
-    )
+    delete_file_chunks(current_user["id"], file_name)
+    delete_file_embeddings(current_user["id"], file_name)
 
-    delete_file_embeddings(
-        current_user["id"],
-        file_name
-    )
-
-    # delete from S3
     if s3_key:
         delete_s3_object(s3_key)
 
-    # delete metadata
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -522,6 +522,7 @@ def delete_file(
         "s3_deleted": bool(s3_key)
     }
 
+
 @app.get("/history")
 def get_history(
     file_name: Optional[str] = None,
@@ -535,7 +536,10 @@ def get_history(
                         question,
                         answer,
                         file_name,
-                        created_at
+                        created_at,
+                        generated_sql,
+                        table_name,
+                        file_type
                     FROM chat_history
                     WHERE user_id = %s
                       AND file_name = %s
@@ -551,7 +555,10 @@ def get_history(
                         question,
                         answer,
                         file_name,
-                        created_at
+                        created_at,
+                        generated_sql,
+                        table_name,
+                        file_type
                     FROM chat_history
                     WHERE user_id = %s
                     ORDER BY created_at DESC
@@ -569,10 +576,15 @@ def get_history(
                 "answer": r[1],
                 "file_name": r[2],
                 "created_at": r[3].isoformat() if r[3] else None,
+                "generated_sql": r[4],
+                "table_name": r[5],
+                "file_type": r[6],
             }
             for r in rows
         ]
     }
+
+
 @app.get("/stats")
 def stats(current_user: dict = Depends(get_current_user)):
     base = collection_stats()
@@ -644,6 +656,19 @@ def run_dbt(current_user: dict = Depends(get_current_user)):
     }
 
 
+@app.post("/internal/dbt/run")
+def internal_run_dbt(x_internal_api_key: str = Header(None)):
+    if not INTERNAL_API_KEY:
+        raise HTTPException(status_code=500, detail="INTERNAL_API_KEY not set")
+
+    if x_internal_api_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid internal API key")
+
+    return {
+        "dbt_status": _run_dbt()
+    }
+
+
 def _run_dbt():
     try:
         result = subprocess.run(
@@ -663,36 +688,3 @@ def _run_dbt():
 
     except Exception as e:
         return f"dbt error: {str(e)}"
-
-from fastapi import Header
-
-INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
-
-
-@app.post("/internal/dbt/run")
-def internal_run_dbt(x_internal_api_key: str = Header(None)):
-    if not INTERNAL_API_KEY:
-        raise HTTPException(status_code=500, detail="INTERNAL_API_KEY not set")
-
-    if x_internal_api_key != INTERNAL_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid internal API key")
-
-    return {
-        "dbt_status": _run_dbt()
-    }
-# Add these imports at the top (with your existing imports)
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-import os
-
-# Add this block AFTER all your existing routes and middleware
-# (at the bottom of main.py, before any if __name__ == "__main__")
-
-FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
-
-if os.path.exists(FRONTEND_DIR):
-    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
-
-    @app.get("/")
-    async def serve_frontend():
-        return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))

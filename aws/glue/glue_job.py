@@ -6,7 +6,7 @@ from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from pyspark.sql.functions import col, trim, current_timestamp, lit
 
-
+from pyspark.sql.types import IntegerType
 args = getResolvedOptions(
     sys.argv,
     [
@@ -79,25 +79,43 @@ else:
 for old_col in df.columns:
     df = df.withColumnRenamed(old_col, clean_column_name(old_col))
 
-
-for c in df.columns:
-    df = df.withColumn(c, trim(col(c).cast("string")))
+for field in df.schema.fields:
+    if field.dataType.simpleString() == "string":
+        df = df.withColumn(
+            field.name,
+            trim(col(field.name))
+        )
 
 
 df = df.dropna(how="all")
 df = df.dropDuplicates()
 
-df = df.withColumn("user_id", lit(user_id))
-df = df.withColumn("document_id", lit(document_id))
+
+
+df = df.withColumn(
+    "user_id",
+    lit(int(user_id)).cast(IntegerType())
+)
+
+df = df.withColumn(
+    "document_id",
+    lit(int(document_id)).cast(IntegerType())
+)
 df = df.withColumn("source_file_name", lit(file_name))
 df = df.withColumn("processed_at", current_timestamp())
+
+print("Rows:", df.count())
+print("Columns:", len(df.columns))
+print("Column Names:", df.columns)
+
+print("Final Schema:")
+df.printSchema()
 
 jdbc_url = f"jdbc:postgresql://{pg_host}:{pg_port}/{pg_db}"
 
 print("Writing to RDS PostgreSQL...")
 print("JDBC URL:", jdbc_url)
 print("Table:", table_name)
-
 (
     df.write
     .format("jdbc")

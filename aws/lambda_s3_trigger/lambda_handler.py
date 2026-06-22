@@ -51,7 +51,7 @@ def extract_user_id(key: str):
 def classify_file(file_name: str):
     ext = Path(file_name).suffix.lower()
 
-    if ext in {".csv", ".json", ".parquet"}:
+    if ext in {".csv", ".json", ".parquet",".xlsx",".xls"}:
         return "structured"
 
     if ext in {".pdf", ".docx", ".txt", ".md", ".pptx"}:
@@ -256,11 +256,14 @@ def lambda_handler(event, context):
             file_type = classify_file(file_name)
             document_id = get_document_id(user_id, key)
 
-            print("File:", file_name)
-            print("User ID:", user_id)
-            print("File type:", file_type)
-            print("Document ID:", document_id)
-            print("S3 Key:", key)
+            if file_type == "unknown":
+                print("Unsupported file type. Skipping:", file_name)
+                results.append({
+                    "file_name": file_name,
+                    "file_type": file_type,
+                    "status": "skipped_unknown_file"
+                })
+                continue
 
             if file_type != "structured":
                 store_upload_event(

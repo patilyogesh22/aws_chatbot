@@ -744,9 +744,6 @@ def api_delete(path):
         return {"error": str(e)}
 
 def load_chat_history():
-    """
-    Load saved backend chat history for current user into Streamlit session.
-    """
     data = api_get("/history")
     history = data.get("history", [])
     messages = []
@@ -758,6 +755,7 @@ def load_chat_history():
 
         if q:
             messages.append({"role": "user", "content": q, "ts": ts})
+
         if a:
             messages.append({
                 "role": "assistant",
@@ -766,10 +764,13 @@ def load_chat_history():
                 "sources": [item.get("file_name")] if item.get("file_name") else [],
                 "chunks": [],
                 "model": "",
+                "sql": item.get("generated_sql"),
+                "table_name": item.get("table_name"),
+                "file_type": item.get("file_type"),
+                "row_count": None,
             })
 
     st.session_state.messages = messages
-
 # ── Auth screen ────────────────────────────────────────────────────────────────
 if not st.session_state.token:
     st.markdown("""
@@ -1109,6 +1110,10 @@ for msg in st.session_state.messages:
 """, unsafe_allow_html=True)
                     if i < len(msg["chunks"]):
                         st.markdown('<hr style="margin:0.6rem 0">', unsafe_allow_html=True)
+        if msg.get("file_type") == "structured" and msg.get("sql"):
+            with st.expander("📊 Structured Query Details"):
+                st.code(msg.get("sql"), language="sql")
+                st.write("Table:", msg.get("table_name"))
 
 # ── Input ─────────────────────────────────────────────────────────────────────
 if question := st.chat_input("Ask a question about your documents…"):
@@ -1135,14 +1140,23 @@ if question := st.chat_input("Ask a question about your documents…"):
             })
 
         if status == 200:
-            ans     = data.get("answer", "No answer returned.")
-            sources = data.get("sources", [])
-            chunks  = data.get("chunks", [])
-            model   = data.get("model", "")
-            ts_ans  = datetime.now().strftime("%H:%M")
+            ans        = data.get("answer", "No answer returned.")
+            sources    = data.get("sources", [])
+            chunks     = data.get("chunks", [])
+            model      = data.get("model", "")
+            sql        = data.get("sql")
+            table_name = data.get("table_name")
+            row_count  = data.get("row_count")
+            file_type  = data.get("file_type")
+            ts_ans     = datetime.now().strftime("%H:%M")
 
             content_html = ans.replace("\n", "<br>")
             st.markdown(f'<div class="bot-bubble">{content_html}</div>', unsafe_allow_html=True)
+            if file_type == "structured" and sql:
+                with st.expander("📊 Structured Query Details"):
+                    st.code(sql, language="sql")
+                    st.write("Table:", table_name)
+                    st.write("Rows Returned:", row_count)            
 
             footer_parts = [f'<span class="msg-time">{ts_ans}</span>']
             if model:
@@ -1169,8 +1183,16 @@ if question := st.chat_input("Ask a question about your documents…"):
                             st.markdown('<hr style="margin:0.6rem 0">', unsafe_allow_html=True)
 
             st.session_state.messages.append({
-                "role": "assistant", "content": ans, "ts": ts_ans,
-                "sources": sources, "chunks": chunks, "model": model,
+                "role": "assistant",
+                "content": ans,
+                "ts": ts_ans,
+                "sources": sources,
+                "chunks": chunks,
+                "model": model,
+                "sql": sql,
+                "table_name": table_name,
+                "row_count": row_count,
+                "file_type": file_type,
             })
         else:
             err = f"❌ {data.get('detail', data.get('error', 'Something went wrong.'))}"
