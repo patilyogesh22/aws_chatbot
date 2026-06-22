@@ -69,7 +69,7 @@ jobs:
             --zip-file fileb://aws/lambda_s3_trigger/lambda.zip
 
           aws lambda wait function-updated \
-            --function-name chatbot-run-dbt-after-glue
+            --function-name chatbot-s3-trigger
 
       # ---------------------------------------
       # Build Run DBT After Glue Lambda Package
@@ -97,6 +97,9 @@ jobs:
           aws lambda update-function-code \
             --function-name chatbot-run-dbt-after-glue \
             --zip-file fileb://aws/lambda_run_dbt_after_glue/lambda.zip
+
+          aws lambda wait function-updated \
+            --function-name chatbot-run-dbt-after-glue
 
 
       - name: Update Run DBT Lambda Environment
