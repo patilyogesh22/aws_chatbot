@@ -15,11 +15,6 @@ services:
 
     env_file:
       - ../.env
-
-    environment:
-      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
-
-
     volumes:
       - ../data:/app/data
       - ../vector_store:/app/vector_store
