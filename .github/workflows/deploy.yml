@@ -1,4 +1,4 @@
-name: Deploy to EC2 and Lambda
+name: Deploy EC2 API/Frontend and AWS Lambda/Glue
 
 on:
   push:
@@ -14,29 +14,6 @@ jobs:
         uses: actions/checkout@v4
 
       # ---------------------------------------
-      # Deploy EC2 + Run DB Migration from EC2
-      # ---------------------------------------
-      - name: Deploy to EC2 via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            cd ~/aws_chatbot
-
-            git fetch origin main
-            git reset --hard origin/main
-
-            export PGPASSWORD='${{ secrets.DB_PASSWORD }}'
-
-            cd docker
-
-            docker compose down
-            docker compose up -d --build
-            docker compose exec -T api python migrations/run_migrations.py
-
-      # ---------------------------------------
       # AWS Credentials
       # ---------------------------------------
       - name: Configure AWS credentials
@@ -44,7 +21,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: eu-north-1
 
       # ---------------------------------------
       # Upload Glue Job Script
@@ -80,7 +57,7 @@ jobs:
           zip -r ../lambda.zip .
           cd ..
 
-          unzip -l lambda.zip | head -50
+          unzip -l lambda.zip
 
       # ---------------------------------------
       # Deploy S3 Trigger Lambda
@@ -92,38 +69,23 @@ jobs:
             --zip-file fileb://aws/lambda_s3_trigger/lambda.zip
 
       # ---------------------------------------
-      # Build Start Glue Job Lambda Package
+      # Deploy EC2 + Run DB Migrations
       # ---------------------------------------
-      - name: Build Start Glue Job Lambda zip
-        run: |
-          cd aws/lambda_start_glue_job
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            cd ~/aws_chatbot
 
-          rm -rf package lambda.zip
-          mkdir package
+            git fetch origin main
+            git reset --hard origin/main
 
-          python -m pip install --upgrade pip
+            cd docker
 
-          pip install \
-            --platform manylinux2014_x86_64 \
-            --target package \
-            --implementation cp \
-            --python-version 3.11 \
-            --only-binary=:all: \
-            -r requirements-lambda.txt
+            docker compose down
+            docker compose up -d --build
 
-          cp lambda_handler.py package/
-
-          cd package
-          zip -r ../lambda.zip .
-          cd ..
-
-          unzip -l lambda.zip | head -50
-
-      # ---------------------------------------
-      # Deploy Start Glue Job Lambda
-      # ---------------------------------------
-      - name: Deploy Start Glue Job Lambda
-        run: |
-          aws lambda update-function-code \
-            --function-name lambda_start_glue_job \
-            --zip-file fileb://aws/lambda_start_glue_job/lambda.zip
+            docker compose exec -T api python migrations/run_migrations.py

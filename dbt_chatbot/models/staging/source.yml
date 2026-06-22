@@ -1,27 +1,38 @@
+
 version: 2
 
 sources:
   - name: raw
-    description: "Raw ingestion layer written by ingestion.py"
+    description: "Raw ingestion layer"
     schema: "{{ env_var('PG_SCHEMA', 'public') }}"
+
     tables:
+
+      # -----------------------------
+      # UNSTRUCTURED PIPELINE
+      # -----------------------------
       - name: raw_chunks
         description: "Raw text chunks extracted from uploaded files"
+
         columns:
           - name: chunk_id
-            description: "UUID primary key"
             data_tests:
               - unique
               - not_null
+
           - name: file_name
-            description: "Original uploaded filename"
             data_tests:
               - not_null
+
           - name: chunk_text
-            description: "Raw extracted text chunk"
             data_tests:
               - not_null
-          - name: chunk_index
-            description: "Position of chunk within the file"
-          - name: ingested_at
-            description: "Timestamp when chunk was written"
+
+      # -----------------------------
+      # STRUCTURED PIPELINE
+      # -----------------------------
+      - name: raw_sales_data
+
+      - name: raw_employee_data
+
+      - name: raw_increment_policy

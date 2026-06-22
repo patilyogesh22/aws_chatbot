@@ -6,8 +6,6 @@ CREATE TABLE IF NOT EXISTS structured_datasets (
     dataset_name TEXT,
     table_name TEXT,
     raw_s3_key TEXT,
-    processed_s3_path TEXT,
-    glue_database_name TEXT,
     glue_job_run_id TEXT,
     status TEXT DEFAULT 'uploaded',
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -23,12 +21,5 @@ ON structured_datasets(document_id);
 CREATE INDEX IF NOT EXISTS idx_structured_datasets_status
 ON structured_datasets(status);
 
-ALTER TABLE file_upload_events
-ADD COLUMN IF NOT EXISTS document_id INTEGER,
-ADD COLUMN IF NOT EXISTS dataset_name TEXT,
-ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'uploaded',
-ADD COLUMN IF NOT EXISTS glue_job_run_id TEXT,
-ADD COLUMN IF NOT EXISTS processed_s3_path TEXT,
-
-ADD COLUMN IF NOT EXISTS glue_database_name TEXT,
-ADD COLUMN IF NOT EXISTS table_name TEXT;
+CREATE INDEX IF NOT EXISTS idx_structured_datasets_table_name
+ON structured_datasets(table_name);

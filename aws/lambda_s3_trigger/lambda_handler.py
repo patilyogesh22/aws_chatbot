@@ -9,7 +9,10 @@ import psycopg2
 # -------------------------
 # AWS CLIENTS
 # -------------------------
-glue = boto3.client("glue")
+glue = boto3.client(
+    "glue",
+    region_name=os.getenv("AWS_REGION", "eu-north-1")
+)
 
 # -------------------------
 # ENV VARIABLES
@@ -20,7 +23,7 @@ PG_USER = os.getenv("PG_USER")
 PG_PASSWORD = os.getenv("PG_PASSWORD")
 PG_PORT = os.getenv("PG_PORT", "5432")
 
-CRAWLER_NAME = os.getenv("CRAWLER_NAME", "chatbot-crawler")
+GLUE_JOB_NAME = os.getenv("GLUE_JOB_NAME", "structured-file-etl-job")
 
 
 # -------------------------
@@ -32,22 +35,19 @@ def get_conn():
         dbname=PG_DB,
         user=PG_USER,
         password=PG_PASSWORD,
-        port=PG_PORT
+        port=PG_PORT,
     )
 
 
 # -------------------------
-# EXTRACT USER ID
-# uploads/user_1/structured/dataset/file.csv
+# HELPERS
 # -------------------------
 def extract_user_id(key: str):
-    match = re.search(r"uploads/(structured|unstructured)/user_(\d+)/", key)
-    return int(match.group(2)) if match else None
+    # uploads/user_1/structured/file.csv
+    match = re.search(r"uploads/user_(\d+)/", key)
+    return int(match.group(1)) if match else None
 
 
-# -------------------------
-# FILE HELPERS
-# -------------------------
 def classify_file(file_name: str):
     ext = Path(file_name).suffix.lower()
 
@@ -60,26 +60,13 @@ def classify_file(file_name: str):
     return "unknown"
 
 
-def get_dataset_name_from_key(key: str):
-    """
-    Example:
-    uploads/user_2/structured/sales_data_50_records/sales_data_50_records.csv
-    returns:
-    sales_data_50_records
-    """
-    parts = key.split("/")
-
-    if "structured" in parts:
-        idx = parts.index("structured")
-        if len(parts) > idx + 2:
-            return parts[idx + 2]
-
-    return Path(key).stem
+def clean_table_name(name: str):
+    name = Path(name).stem.lower()
+    name = re.sub(r"[^a-z0-9_]", "_", name)
+    name = re.sub(r"_+", "_", name)
+    return name.strip("_")
 
 
-# -------------------------
-# FIND DOCUMENT ID
-# -------------------------
 def get_document_id(user_id, s3_key):
     if not user_id:
         return 0
@@ -104,9 +91,6 @@ def get_document_id(user_id, s3_key):
         return 0
 
 
-# -------------------------
-# STORE UPLOAD EVENT
-# -------------------------
 def store_upload_event(
     user_id,
     file_name,
@@ -115,8 +99,11 @@ def store_upload_event(
     size,
     file_type,
     document_id,
-    dataset_name
+    table_name=None,
+    glue_job_run_id=None,
 ):
+    dataset_name = clean_table_name(file_name)
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -130,9 +117,11 @@ def store_upload_event(
                     file_type,
                     document_id,
                     dataset_name,
-                    status
+                    status,
+                    table_name,
+                    glue_job_run_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 user_id,
                 file_name,
@@ -142,51 +131,45 @@ def store_upload_event(
                 file_type,
                 document_id,
                 dataset_name,
-                "crawler_started" if file_type == "structured" else "uploaded"
+                "glue_job_started" if glue_job_run_id else "uploaded",
+                table_name,
+                glue_job_run_id,
             ))
 
         conn.commit()
 
 
-# -------------------------
-# START GLUE CRAWLER
-# -------------------------
-def start_glue_crawler():
-    try:
-        print("Checking crawler...")
+def start_glue_job(bucket, key, user_id, document_id, file_name):
+    table_name = "raw_" + clean_table_name(file_name)
+    s3_input_path = f"s3://{bucket}/{key}"
 
-        crawler = glue.get_crawler(Name=CRAWLER_NAME)
-        state = crawler["Crawler"]["State"]
+    print("Starting Glue Job...")
+    print("Glue Job:", GLUE_JOB_NAME)
+    print("Input:", s3_input_path)
+    print("Table:", table_name)
 
-        print("Crawler state:", state)
+    response = glue.start_job_run(
+        JobName=GLUE_JOB_NAME,
+        Arguments={
+            "--S3_INPUT_PATH": s3_input_path,
+            "--TABLE_NAME": table_name,
+            "--USER_ID": str(user_id or 0),
+            "--DOCUMENT_ID": str(document_id or 0),
+            "--FILE_NAME": file_name,
+        }
+    )
 
-        if state == "READY":
-            glue.start_crawler(Name=CRAWLER_NAME)
-            print("Crawler started")
-            return True
-
-        print("Crawler already running, skipping start")
-        return False
-
-    except glue.exceptions.CrawlerRunningException:
-        print("Crawler already running")
-        return False
-
-    except Exception as e:
-        print("Glue crawler error:", str(e))
-        raise e
+    return table_name, response["JobRunId"]
 
 
 # -------------------------
 # LAMBDA HANDLER
 # -------------------------
 def lambda_handler(event, context):
-
-    print("🚀 EVENT RECEIVED")
+    print("EVENT RECEIVED")
     print(json.dumps(event))
 
     results = []
-    should_start_crawler = False
 
     try:
         for record in event["Records"]:
@@ -198,17 +181,39 @@ def lambda_handler(event, context):
             user_id = extract_user_id(key)
             file_type = classify_file(file_name)
             document_id = get_document_id(user_id, key)
-            dataset_name = get_dataset_name_from_key(key)
 
-            print(f"📄 File: {file_name}")
-            print(f"👤 User ID: {user_id}")
-            print(f"📂 File type: {file_type}")
-            print(f"📊 Dataset: {dataset_name}")
-            print(f"🧾 Document ID: {document_id}")
-            print(f"🔑 S3 Key: {key}")
+            print("File:", file_name)
+            print("User ID:", user_id)
+            print("File type:", file_type)
+            print("Document ID:", document_id)
+            print("S3 Key:", key)
 
-            if file_type == "structured":
-                should_start_crawler = True
+            if file_type != "structured":
+                store_upload_event(
+                    user_id=user_id,
+                    file_name=file_name,
+                    key=key,
+                    bucket=bucket,
+                    size=size,
+                    file_type=file_type,
+                    document_id=document_id,
+                )
+
+                results.append({
+                    "file_name": file_name,
+                    "file_type": file_type,
+                    "status": "skipped_glue_job"
+                })
+
+                continue
+
+            table_name, glue_job_run_id = start_glue_job(
+                bucket=bucket,
+                key=key,
+                user_id=user_id,
+                document_id=document_id,
+                file_name=file_name,
+            )
 
             store_upload_event(
                 user_id=user_id,
@@ -218,37 +223,28 @@ def lambda_handler(event, context):
                 size=size,
                 file_type=file_type,
                 document_id=document_id,
-                dataset_name=dataset_name
+                table_name=table_name,
+                glue_job_run_id=glue_job_run_id,
             )
 
             results.append({
                 "file_name": file_name,
                 "file_type": file_type,
-                "dataset_name": dataset_name,
-                "user_id": user_id,
-                "document_id": document_id
+                "table_name": table_name,
+                "glue_job_run_id": glue_job_run_id,
+                "status": "glue_job_started"
             })
-
-        if should_start_crawler:
-            print("👉 Structured file detected. Starting Glue crawler...")
-            crawler_started = start_glue_crawler()
-        else:
-            print("ℹ️ No structured file detected. Glue crawler skipped.")
-            crawler_started = False
-
-        print("✅ Lambda completed")
 
         return {
             "statusCode": 200,
             "body": json.dumps({
                 "status": "success",
-                "crawler_started": crawler_started,
                 "results": results
             })
         }
 
     except Exception as e:
-        print("❌ Lambda error:", str(e))
+        print("Lambda error:", str(e))
 
         return {
             "statusCode": 500,

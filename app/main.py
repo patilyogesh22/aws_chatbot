@@ -6,8 +6,8 @@ Login/Register
 → Upload → S3 uploads/user_{id}/
 → Detect file type
     ├── structured: CSV / XLSX / XLS / JSON
-    │       → S3 + app_documents + Lambda/Glue Crawler
-    │       → Future: Glue Job → RDS → dbt → SQL/NL-to-SQL
+    │       → S3 uploads/user_{id}/structured/file.csv
+    │       → Lambda S3 trigger → Glue Job → RDS → dbt → SQL/NL-to-SQL
     └── unstructured: PDF / DOCX / TXT / MD / PPTX
             → S3 → Text extraction → raw_chunks with user_id
             → dbt → ChromaDB embeddings with user_id
@@ -27,7 +27,6 @@ from pydantic import BaseModel
 from app.config import DATA_RAW_DIR, DBT_PROJECT_DIR, PG_DSN
 from aws.s3_ingestion import upload_fileobj_to_s3, delete_s3_object
 from app.file_classifier import classify_file
-from pathlib import Path
 from app.auth import (
     router as auth_router,
     get_current_user,
@@ -154,11 +153,10 @@ async def upload_file(
                         status_code=400,
                         detail="Duplicate file already uploaded by this user"
                     )
-
-        # Upload to user-specific S3 prefix
-        dataset_name = Path(file.filename).stem.lower().replace(" ", "_")
-
-        s3_prefix = f"uploads/{file_type}/user_{current_user['id']}/{dataset_name}/"
+        # Upload to user-specific S3 prefix.
+        # Structured file example: uploads/user_1/structured/sales_data.csv
+        # Unstructured file example: uploads/user_1/unstructured/policy.pdf
+        s3_prefix = f"uploads/user_{current_user['id']}/{file_type}/"
 
         upload_obj = file.file
         upload_filename = file.filename
@@ -258,18 +256,24 @@ async def upload_file(
                         document_id,
                         original_filename,
                         s3_key,
-                        "uploaded"
+                        "glue_job_pending"
                     ))
 
                 conn.commit()
             return {
                 "status": "success",
                 "file_type": "structured",
+                "message": (
+                    "Structured file uploaded successfully. "
+                    "S3 trigger Lambda will start the Glue Job directly."
+                ),
                 "file": original_filename,
+                "s3_key": s3_key,
                 "file_size": file_size,
                 "chunks": 0,
                 "embedded": 0,
-                "dbt_status": "Skipped for structured file"
+                "next_step": "Lambda → Glue Job → RDS → dbt",
+                "dbt_status": "Skipped now. Run dbt after Glue Job loads data into RDS."
             }
 
         # UNSTRUCTURED FILE PIPELINE
