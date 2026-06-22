@@ -1,22 +1,12 @@
 """
 main.py — FastAPI backend with Authentication + User-wise RAG + File Type Routing
-
-Pipeline:
-Login/Register
-→ Upload → S3 uploads/user_{id}/
-→ Detect file type
-    ├── structured: CSV / XLSX / XLS / JSON
-    │       → S3 + app_documents + Lambda/Glue Crawler
-    │       → Future: Glue Job → RDS → dbt → SQL/NL-to-SQL
-    └── unstructured: PDF / DOCX / TXT / MD / PPTX
-            → S3 → Text extraction → raw_chunks with user_id
-            → dbt → ChromaDB embeddings with user_id
-            → user-specific RAG chat
 """
 
 import os
+import re
 import hashlib
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 import psycopg2
@@ -27,12 +17,7 @@ from pydantic import BaseModel
 from app.config import DATA_RAW_DIR, DBT_PROJECT_DIR, PG_DSN
 from aws.s3_ingestion import upload_fileobj_to_s3, delete_s3_object
 from app.file_classifier import classify_file
-from pathlib import Path
-from app.auth import (
-    router as auth_router,
-    get_current_user,
-    init_auth_tables,
-)
+from app.auth import router as auth_router, get_current_user, init_auth_tables
 
 from app.ingestion import (
     ingest_file_from_s3_key,
@@ -48,8 +33,9 @@ from app.embeddings import (
 
 from app.retriever import retrieve, build_context
 from app.llm import answer
-
 from app.structured_converter import convert_excel_to_csv
+
+
 app = FastAPI(
     title="RAG Chatbot API Authenticated",
     version="3.1.0"
@@ -66,6 +52,13 @@ app.add_middleware(
 )
 
 os.makedirs(DATA_RAW_DIR, exist_ok=True)
+
+
+def clean_dataset_name(filename: str) -> str:
+    name = Path(filename).stem.lower().strip()
+    name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+    name = re.sub(r"_+", "_", name)
+    return name.strip("_")
 
 
 @app.on_event("startup")
@@ -135,7 +128,7 @@ async def upload_file(
         if not s3_bucket:
             raise HTTPException(status_code=500, detail="S3_BUCKET not set")
 
-        # Duplicate check per user
+        # Duplicate check per user using original uploaded file hash
         with psycopg2.connect(PG_DSN) as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -155,62 +148,55 @@ async def upload_file(
                         detail="Duplicate file already uploaded by this user"
                     )
 
-        # Upload to user-specific S3 prefix
-        dataset_name = Path(file.filename).stem.lower().replace(" ", "_")
+        dataset_name = clean_dataset_name(file.filename)
 
-        s3_prefix = f"uploads/user_{current_user['id']}/{file_type}/{dataset_name}/"
+        # Important:
+        # structured files use dataset-first path so Glue creates dataset table names.
+        # unstructured files stay user-wise under uploads.
+        if file_type == "structured":
+            s3_prefix = f"structured_raw/{dataset_name}/user_{current_user['id']}/"
+        else:
+            s3_prefix = f"uploads/user_{current_user['id']}/unstructured/{dataset_name}/"
 
         upload_obj = file.file
         upload_filename = file.filename
-
         temp_csv_path = None
 
+        # Convert Excel to CSV before uploading to S3/Glue
         if file_type == "structured":
-
-            ext = os.path.splitext(
-                file.filename
-            )[1].lower()
+            ext = os.path.splitext(file.filename)[1].lower()
 
             if ext in [".xlsx", ".xls"]:
-
-                temp_csv_path, upload_filename = (
-                    convert_excel_to_csv(
-                        file.file,
-                        file.filename
-                    )
+                temp_csv_path, upload_filename = convert_excel_to_csv(
+                    file.file,
+                    file.filename
                 )
 
-                upload_obj = open(
-                    temp_csv_path,
-                    "rb"
-                )
+                upload_obj = open(temp_csv_path, "rb")
 
         try:
-
             s3_result = upload_fileobj_to_s3(
                 file_obj=upload_obj,
                 filename=upload_filename,
                 prefix=s3_prefix
             )
-
         finally:
-
             if upload_obj is not file.file:
                 upload_obj.close()
 
-            if temp_csv_path:
+            if temp_csv_path and os.path.exists(temp_csv_path):
                 os.remove(temp_csv_path)
 
         s3_key = s3_result["s3_key"]
         original_filename = s3_result["original_filename"]
 
-        # Re-check after filename sanitization
+        # Re-check file type after Excel conversion
         file_type = classify_file(original_filename)
 
         if file_type == "unknown":
             raise HTTPException(status_code=400, detail="Unsupported file type after upload")
 
-        # Store metadata for BOTH structured and unstructured files
+        # Store metadata
         with psycopg2.connect(PG_DSN) as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -239,7 +225,6 @@ async def upload_file(
             conn.commit()
 
         # STRUCTURED FILE PIPELINE
-        # CSV / XLSX / XLS / JSON
         if file_type == "structured":
             with psycopg2.connect(PG_DSN) as conn:
                 with conn.cursor() as cur:
@@ -249,23 +234,30 @@ async def upload_file(
                             user_id,
                             document_id,
                             file_name,
+                            dataset_name,
+                            table_name,
                             raw_s3_key,
                             status
                         )
-                        VALUES (%s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """, (
                         current_user["id"],
                         document_id,
                         original_filename,
+                        dataset_name,
+                        dataset_name,
                         s3_key,
                         "uploaded"
                     ))
 
                 conn.commit()
+
             return {
                 "status": "success",
                 "file_type": "structured",
                 "file": original_filename,
+                "dataset_name": dataset_name,
+                "s3_key": s3_key,
                 "file_size": file_size,
                 "chunks": 0,
                 "embedded": 0,
@@ -273,7 +265,6 @@ async def upload_file(
             }
 
         # UNSTRUCTURED FILE PIPELINE
-        # PDF / DOCX / TXT / MD / PPTX
         chunks = ingest_file_from_s3_key(
             bucket=s3_bucket,
             s3_key=s3_key,
@@ -323,7 +314,6 @@ def chat(
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
-    # Selected structured file: no Chroma embeddings yet
     if req.file_name:
         with psycopg2.connect(PG_DSN) as conn:
             with conn.cursor() as cur:
@@ -403,10 +393,6 @@ def chat(
 
 @app.get("/files")
 def list_files(current_user: dict = Depends(get_current_user)):
-    """
-    Return all files uploaded by the logged-in user.
-    Includes both structured and unstructured files.
-    """
     try:
         with psycopg2.connect(PG_DSN) as conn:
             with conn.cursor() as cur:
@@ -460,7 +446,6 @@ def delete_file(
     file_name: str,
     current_user: dict = Depends(get_current_user)
 ):
-    # get document info first
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -481,7 +466,6 @@ def delete_file(
 
     document_id, file_type, s3_key = doc
 
-    # delete raw chunks and embeddings for unstructured file
     delete_file_chunks(
         current_user["id"],
         file_name
@@ -492,11 +476,9 @@ def delete_file(
         file_name
     )
 
-    # delete from S3
     if s3_key:
         delete_s3_object(s3_key)
 
-    # delete metadata
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -517,6 +499,7 @@ def delete_file(
         "file_type": file_type,
         "s3_deleted": bool(s3_key)
     }
+
 
 @app.get("/history")
 def get_history(current_user: dict = Depends(get_current_user)):

@@ -47,9 +47,17 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       # ---------------------------------------
-      # Build Lambda Package
+      # Upload Glue Job Script
       # ---------------------------------------
-      - name: Build Lambda zip
+      - name: Upload Glue Job Script
+        run: |
+          aws s3 cp aws/glue_jobs/glue_job.py \
+            s3://aws-glue-assets-815512685419-eu-north-1/scripts/glue_job.py
+
+      # ---------------------------------------
+      # Build S3 Trigger Lambda Package
+      # ---------------------------------------
+      - name: Build S3 Trigger Lambda zip
         run: |
           cd aws/lambda_s3_trigger
 
@@ -75,14 +83,17 @@ jobs:
           unzip -l lambda.zip | head -50
 
       # ---------------------------------------
-      # Deploy Lambda
+      # Deploy S3 Trigger Lambda
       # ---------------------------------------
-      - name: Deploy Lambda
+      - name: Deploy S3 Trigger Lambda
         run: |
           aws lambda update-function-code \
             --function-name chatbot-s3-trigger \
             --zip-file fileb://aws/lambda_s3_trigger/lambda.zip
-      
+
+      # ---------------------------------------
+      # Build Start Glue Job Lambda Package
+      # ---------------------------------------
       - name: Build Start Glue Job Lambda zip
         run: |
           cd aws/lambda_start_glue_job
@@ -106,6 +117,11 @@ jobs:
           zip -r ../lambda.zip .
           cd ..
 
+          unzip -l lambda.zip | head -50
+
+      # ---------------------------------------
+      # Deploy Start Glue Job Lambda
+      # ---------------------------------------
       - name: Deploy Start Glue Job Lambda
         run: |
           aws lambda update-function-code \
