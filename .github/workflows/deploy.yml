@@ -51,7 +51,7 @@ jobs:
       # ---------------------------------------
       - name: Upload Glue Job Script
         run: |
-          aws s3 cp aws/glue_jobs/glue_job.py \
+          aws s3 cp aws/glue/glue_job.py \
             s3://aws-glue-assets-815512685419-eu-north-1/scripts/glue_job.py
 
       # ---------------------------------------
