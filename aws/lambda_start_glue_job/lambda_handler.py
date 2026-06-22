@@ -6,7 +6,7 @@ import boto3
 import psycopg2
 
 
-glue = boto3.client("glue")
+glue = boto3.client("glue",region_name=os.getenv("AWS_REGION", "eu-north-1"))
 
 PG_HOST = os.getenv("PG_HOST")
 PG_DB = os.getenv("PG_DB")
