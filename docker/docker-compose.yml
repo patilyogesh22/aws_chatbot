@@ -17,7 +17,8 @@ services:
       - ../.env
 
     environment:
-      INTERNAL_API_KEY: ${ INTERNAL_API_KEY }
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+
 
     volumes:
       - ../data:/app/data
