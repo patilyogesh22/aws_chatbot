@@ -133,6 +133,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_KEY }}
+          command_timeout: 30m
           script: |
             cd ~/aws_chatbot
 
@@ -140,7 +141,6 @@ jobs:
             git reset --hard origin/main
 
             cd docker
-            docker system prune -f
             docker compose down
             docker compose up -d --build
 
