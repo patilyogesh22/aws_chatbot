@@ -91,6 +91,9 @@ def get_document_id(user_id, s3_key):
         return 0
 
 
+# -------------------------
+# DB METADATA UPDATES
+# -------------------------
 def store_upload_event(
     user_id,
     file_name,
@@ -139,13 +142,84 @@ def store_upload_event(
         conn.commit()
 
 
+def update_structured_dataset(
+    user_id,
+    document_id,
+    file_name,
+    s3_key,
+    dataset_name,
+    table_name,
+    glue_job_run_id,
+    status,
+):
+    """
+    Updates metadata row created by FastAPI in structured_datasets.
+    This runs after Lambda starts the Glue Job.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE structured_datasets
+                SET
+                    dataset_name = %s,
+                    table_name = %s,
+                    glue_job_run_id = %s,
+                    status = %s,
+                    updated_at = NOW()
+                WHERE user_id = %s
+                  AND document_id = %s
+            """, (
+                dataset_name,
+                table_name,
+                glue_job_run_id,
+                status,
+                user_id,
+                document_id,
+            ))
+
+            # Safety insert if FastAPI row was not found
+            if cur.rowcount == 0:
+                cur.execute("""
+                    INSERT INTO structured_datasets
+                    (
+                        user_id,
+                        document_id,
+                        file_name,
+                        dataset_name,
+                        table_name,
+                        raw_s3_key,
+                        glue_job_run_id,
+                        status,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                """, (
+                    user_id,
+                    document_id,
+                    file_name,
+                    dataset_name,
+                    table_name,
+                    s3_key,
+                    glue_job_run_id,
+                    status,
+                ))
+
+        conn.commit()
+
+
+# -------------------------
+# GLUE JOB
+# -------------------------
 def start_glue_job(bucket, key, user_id, document_id, file_name):
-    table_name = "raw_" + clean_table_name(file_name)
+    dataset_name = clean_table_name(file_name)
+    table_name = "raw_" + dataset_name
     s3_input_path = f"s3://{bucket}/{key}"
 
     print("Starting Glue Job...")
     print("Glue Job:", GLUE_JOB_NAME)
     print("Input:", s3_input_path)
+    print("Dataset:", dataset_name)
     print("Table:", table_name)
 
     response = glue.start_job_run(
@@ -159,7 +233,7 @@ def start_glue_job(bucket, key, user_id, document_id, file_name):
         }
     )
 
-    return table_name, response["JobRunId"]
+    return dataset_name, table_name, response["JobRunId"]
 
 
 # -------------------------
@@ -207,7 +281,7 @@ def lambda_handler(event, context):
 
                 continue
 
-            table_name, glue_job_run_id = start_glue_job(
+            dataset_name, table_name, glue_job_run_id = start_glue_job(
                 bucket=bucket,
                 key=key,
                 user_id=user_id,
@@ -227,9 +301,21 @@ def lambda_handler(event, context):
                 glue_job_run_id=glue_job_run_id,
             )
 
+            update_structured_dataset(
+                user_id=user_id,
+                document_id=document_id,
+                file_name=file_name,
+                s3_key=key,
+                dataset_name=dataset_name,
+                table_name=table_name,
+                glue_job_run_id=glue_job_run_id,
+                status="glue_job_started",
+            )
+
             results.append({
                 "file_name": file_name,
                 "file_type": file_type,
+                "dataset_name": dataset_name,
                 "table_name": table_name,
                 "glue_job_run_id": glue_job_run_id,
                 "status": "glue_job_started"

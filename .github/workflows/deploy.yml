@@ -69,6 +69,33 @@ jobs:
             --zip-file fileb://aws/lambda_s3_trigger/lambda.zip
 
       # ---------------------------------------
+      # Build Run DBT After Glue Lambda Package
+      # ---------------------------------------
+      - name: Build Run DBT After Glue Lambda zip
+        run: |
+          cd aws/lambda_run_dbt_after_glue
+
+          rm -rf package lambda.zip
+          mkdir package
+
+          cp lambda_handler.py package/
+
+          cd package
+          zip -r ../lambda.zip .
+          cd ..
+
+          unzip -l lambda.zip
+
+      # ---------------------------------------
+      # Deploy Run DBT After Glue Lambda
+      # ---------------------------------------
+      - name: Deploy Run DBT After Glue Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name chatbot-run-dbt-after-glue \
+            --zip-file fileb://aws/lambda_run_dbt_after_glue/lambda.zip
+
+      # ---------------------------------------
       # Deploy EC2 + Run DB Migrations
       # ---------------------------------------
       - name: Deploy to EC2 via SSH

@@ -73,7 +73,7 @@ def startup():
     init_postgres()
 
 
-@app.get("/")
+@app.get("/1")
 def root():
     return {
         "message": "Authenticated RAG Chatbot API running 🚀",
@@ -523,22 +523,42 @@ def delete_file(
     }
 
 @app.get("/history")
-def get_history(current_user: dict = Depends(get_current_user)):
+def get_history(
+    file_name: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    question,
-                    answer,
+            if file_name:
+                cur.execute("""
+                    SELECT
+                        question,
+                        answer,
+                        file_name,
+                        created_at
+                    FROM chat_history
+                    WHERE user_id = %s
+                      AND file_name = %s
+                    ORDER BY created_at ASC
+                    LIMIT 50
+                """, (
+                    current_user["id"],
                     file_name,
-                    created_at
-                FROM chat_history
-                WHERE user_id = %s
-                ORDER BY created_at DESC
-                LIMIT 50
-            """, (
-                current_user["id"],
-            ))
+                ))
+            else:
+                cur.execute("""
+                    SELECT
+                        question,
+                        answer,
+                        file_name,
+                        created_at
+                    FROM chat_history
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 50
+                """, (
+                    current_user["id"],
+                ))
 
             rows = cur.fetchall()
 
@@ -553,8 +573,6 @@ def get_history(current_user: dict = Depends(get_current_user)):
             for r in rows
         ]
     }
-
-
 @app.get("/stats")
 def stats(current_user: dict = Depends(get_current_user)):
     base = collection_stats()
@@ -645,3 +663,36 @@ def _run_dbt():
 
     except Exception as e:
         return f"dbt error: {str(e)}"
+
+from fastapi import Header
+
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+
+
+@app.post("/internal/dbt/run")
+def internal_run_dbt(x_internal_api_key: str = Header(None)):
+    if not INTERNAL_API_KEY:
+        raise HTTPException(status_code=500, detail="INTERNAL_API_KEY not set")
+
+    if x_internal_api_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid internal API key")
+
+    return {
+        "dbt_status": _run_dbt()
+    }
+# Add these imports at the top (with your existing imports)
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
+
+# Add this block AFTER all your existing routes and middleware
+# (at the bottom of main.py, before any if __name__ == "__main__")
+
+FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+
+if os.path.exists(FRONTEND_DIR):
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+    @app.get("/")
+    async def serve_frontend():
+        return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
