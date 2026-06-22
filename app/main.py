@@ -158,7 +158,7 @@ async def upload_file(
         # Upload to user-specific S3 prefix
         dataset_name = Path(file.filename).stem.lower().replace(" ", "_")
 
-        s3_prefix = f"uploads/user_{current_user['id']}/{file_type}/{dataset_name}/"
+        s3_prefix = f"uploads/{file_type}/user_{current_user['id']}/{dataset_name}/"
 
         upload_obj = file.file
         upload_filename = file.filename
@@ -262,7 +262,6 @@ async def upload_file(
                     ))
 
                 conn.commit()
-                
             return {
                 "status": "success",
                 "file_type": "structured",

@@ -41,8 +41,8 @@ def get_conn():
 # uploads/user_1/structured/dataset/file.csv
 # -------------------------
 def extract_user_id(key: str):
-    match = re.search(r"uploads/user_(\d+)/", key)
-    return int(match.group(1)) if match else None
+    match = re.search(r"uploads/(structured|unstructured)/user_(\d+)/", key)
+    return int(match.group(2)) if match else None
 
 
 # -------------------------
@@ -71,8 +71,8 @@ def get_dataset_name_from_key(key: str):
 
     if "structured" in parts:
         idx = parts.index("structured")
-        if len(parts) > idx + 1:
-            return parts[idx + 1]
+        if len(parts) > idx + 2:
+            return parts[idx + 2]
 
     return Path(key).stem
 
