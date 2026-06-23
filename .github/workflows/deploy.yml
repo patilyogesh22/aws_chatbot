@@ -78,7 +78,7 @@ jobs:
         run: |
           aws lambda update-function-configuration \
             --function-name chatbot-s3-trigger \
-            --environment "Variables={PG_HOST=${{ secrets.PG_HOST }},PG_DB=${{ secrets.PG_DB }},PG_USER=${{ secrets.PG_USER }},PG_PASSWORD=${{ secrets.PG_PASSWORD }},PG_PORT=5432,GLUE_JOB_NAME=structured-file-etl-job,AWS_REGION=eu-north-1}"
+            --environment "Variables={PG_HOST=${{ secrets.PG_HOST }},PG_DB=${{ secrets.PG_DB }},PG_USER=${{ secrets.PG_USER }},PG_PASSWORD=${{ secrets.PG_PASSWORD }},PG_PORT=5432,GLUE_JOB_NAME=structured-file-etl-job}"
 
           aws lambda wait function-updated-v2 \
             --function-name chatbot-s3-trigger
@@ -120,7 +120,7 @@ jobs:
         run: |
           aws lambda update-function-configuration \
             --function-name chatbot-run-dbt-after-glue \
-            --environment "Variables={API_URL=${{ secrets.API_URL }},INTERNAL_API_KEY=${{ secrets.INTERNAL_API_KEY }},GLUE_JOB_NAME=structured-file-etl-job,AWS_REGION=eu-north-1}"
+            --environment "Variables={API_URL=${{ secrets.API_URL }},INTERNAL_API_KEY=${{ secrets.INTERNAL_API_KEY }},GLUE_JOB_NAME=structured-file-etl-job}"
 
           aws lambda wait function-updated-v2 \
             --function-name chatbot-run-dbt-after-glue
