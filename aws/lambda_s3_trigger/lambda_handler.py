@@ -2,7 +2,7 @@ import json
 import os
 import re
 from pathlib import Path
-
+import time
 import boto3
 import psycopg2
 
@@ -90,7 +90,22 @@ def get_document_id(user_id, s3_key):
         print("Could not fetch document_id:", str(e))
         return 0
 
+def get_document_id_with_retry(user_id, s3_key, retries=6, delay=1):
+    """
+    S3 event may reach Lambda before FastAPI finishes inserting app_documents.
+    Retry a few times before failing.
+    """
+    for attempt in range(1, retries + 1):
+        document_id = get_document_id(user_id, s3_key)
 
+        if document_id:
+            print("Found document_id:", document_id)
+            return document_id
+
+        print(f"Document not found yet. Retry {attempt}/{retries}")
+        time.sleep(delay)
+
+    return None
 # -------------------------
 # DB METADATA UPDATES
 # -------------------------
@@ -254,8 +269,18 @@ def lambda_handler(event, context):
             file_name = key.split("/")[-1]
             user_id = extract_user_id(key)
             file_type = classify_file(file_name)
-            document_id = get_document_id(user_id, key)
+            document_id = get_document_id_with_retry(user_id, key)
 
+            print("File:", file_name)
+            print("User ID:", user_id)
+            print("File type:", file_type)
+            print("Document ID:", document_id)
+            print("S3 Key:", key)
+
+            if not document_id:
+                raise Exception(
+                    f"Document not found in app_documents for user_id={user_id}, s3_key={key}"
+                )
             if file_type == "unknown":
                 print("Unsupported file type. Skipping:", file_name)
                 results.append({
