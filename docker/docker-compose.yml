@@ -23,34 +23,3 @@ services:
 
     restart: always
 
-
-  # ── Streamlit Frontend ───────────────────────────────
-  frontend:
-    image: python:3.11-slim
-
-    container_name: frontend
-
-    working_dir: /app
-
-    command: >
-      sh -c "pip install streamlit requests -q &&
-             streamlit run frontend/streamlit_app.py
-             --server.port 8501 --server.address 0.0.0.0"
-
-    ports:
-      - "8501:8501"
-
-    env_file:
-      - ../.env
-
-    environment:
-      API_URL: http://api:8000
-
-    volumes:
-      - ../frontend:/app/frontend
-      - ../streamlit_cache:/root/.streamlit
-
-    depends_on:
-      - api
-
-    restart: always
