@@ -27,6 +27,7 @@ vector_store/
 chroma_db/
 faiss_index/
 
+
 # ==========================
 # DBT
 # ==========================
@@ -45,6 +46,10 @@ docker/.env.backup
 docker/profiles.yml
 aws/profiles.yml
 frontend/index.html
+frontend/style.css
+frontend/app.js
+frontend/index12.html
+
 # ==========================
 # Logs
 # ==========================

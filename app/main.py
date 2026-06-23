@@ -19,7 +19,8 @@ import os
 import hashlib
 import subprocess
 from typing import Optional
-
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import psycopg2
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -79,6 +80,18 @@ def startup():
     init_postgres()
 
 
+# # ── Add this AFTER app.add_middleware(...) block ──────────────
+# FRONTEND_DIR = os.path.abspath(
+#     os.path.join(os.path.dirname(__file__), "..", "frontend")
+# )
+
+# if os.path.exists(FRONTEND_DIR):
+#     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+# # Add this instead:
+# @app.get("/")
+# def serve_frontend():
+#     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
 @app.get("/")
 def root():
     return {
@@ -688,3 +701,5 @@ def _run_dbt():
 
     except Exception as e:
         return f"dbt error: {str(e)}"
+
+

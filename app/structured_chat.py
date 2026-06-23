@@ -193,7 +193,8 @@ def validate_sql(sql: str, table_name: str) -> str:
 
 
 def enforce_limit(sql: str) -> str:
-    lowered = sql.lower()
+    sql_clean = sql.strip().rstrip(";")
+    lowered = sql_clean.lower()
 
     aggregate_keywords = [
         "count(",
@@ -206,13 +207,13 @@ def enforce_limit(sql: str) -> str:
 
     is_aggregate = any(k in lowered for k in aggregate_keywords)
 
-    if " limit " in lowered:
-        return sql
+    if re.search(r"\blimit\s+\d+\b", lowered):
+        return sql_clean
 
     if is_aggregate:
-        return sql
+        return sql_clean
 
-    return f"{sql} LIMIT 100"
+    return f"{sql_clean} LIMIT 100"
 
 
 def run_sql(sql: str) -> Dict:
