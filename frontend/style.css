@@ -1027,9 +1027,25 @@ input, textarea, select { font-family: inherit; }
 
 /* Empty state */
 .empty-state {
-  flex: 1; display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  text-align: center; padding: 2rem;
+  width: 100%;
+  max-width: 820px !important;
+  min-height: 320px;
+
+  margin: 2rem auto;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+
+  text-align: center;
+  padding: 2rem;
+  flex: 0 0 auto;
+}
+.chat-area {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
 }
 .empty-glow-icon {
   width: 72px; height: 72px;
@@ -2166,9 +2182,24 @@ textarea::placeholder {
   width: 100%;
   max-width: 980px;
   margin: 0 auto;
-  padding: 2rem 1.5rem 8rem;
+  padding: 1rem 1.5rem 2rem;
 }
+.empty-state {
+  background:
+    radial-gradient(circle at top left,
+      rgba(124,92,255,.15),
+      transparent 40%),
+    radial-gradient(circle at bottom right,
+      rgba(0,212,255,.08),
+      transparent 40%),
+    rgba(21,29,47,.95);
 
+  border: 1px solid rgba(255,255,255,.08);
+
+  box-shadow:
+    0 20px 60px rgba(0,0,0,.35),
+    inset 0 1px 0 rgba(255,255,255,.05);
+}
 .msg-row {
   width: 100%;
   margin-bottom: 1.8rem !important;
@@ -2308,4 +2339,247 @@ textarea::placeholder {
   .data-card-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   LIGHT MODE FIX — add this at the VERY END of style.css
+═══════════════════════════════════════════════════════════════ */
+
+[data-theme="light"] body {
+  background: #f7f8fc !important;
+  color: #101828 !important;
+}
+
+[data-theme="light"] .main-wrap,
+[data-theme="light"] .chat-area,
+[data-theme="light"] #chatArea {
+  background:
+    radial-gradient(circle at 85% 10%, rgba(59, 130, 246, 0.08), transparent 34%),
+    radial-gradient(circle at 10% 0%, rgba(124, 92, 255, 0.06), transparent 30%),
+    #f7f8fc !important;
+}
+
+[data-theme="light"] .sidebar,
+[data-theme="light"] .topbar {
+  background: #ffffff !important;
+  border-color: rgba(20, 28, 45, 0.10) !important;
+}
+
+[data-theme="light"] .sidebar {
+  box-shadow: 8px 0 30px rgba(16, 24, 40, 0.06);
+}
+
+[data-theme="light"] .topbar {
+  box-shadow: 0 8px 28px rgba(16, 24, 40, 0.08);
+}
+
+[data-theme="light"] .profile-dropdown,
+[data-theme="light"] .modal-box,
+[data-theme="light"] .confirm-box {
+  background: #ffffff !important;
+  color: #101828 !important;
+  border-color: rgba(20, 28, 45, 0.12) !important;
+}
+
+[data-theme="light"] .profile-dropdown::before {
+  background: #ffffff !important;
+  border-color: rgba(20, 28, 45, 0.12) !important;
+}
+
+[data-theme="light"] .pd-header,
+[data-theme="light"] .pd-section {
+  border-color: rgba(20, 28, 45, 0.10) !important;
+}
+
+[data-theme="light"] .pd-name,
+[data-theme="light"] .modal-title,
+[data-theme="light"] .confirm-title,
+[data-theme="light"] .fc-name,
+[data-theme="light"] .upload-label,
+[data-theme="light"] .empty-title {
+  color: #101828 !important;
+}
+
+[data-theme="light"] .pd-email,
+[data-theme="light"] .pd-section-label,
+[data-theme="light"] .section-label,
+[data-theme="light"] .sidebar-brand-sub,
+[data-theme="light"] .stat-lbl,
+[data-theme="light"] .upload-sub,
+[data-theme="light"] .settings-label,
+[data-theme="light"] .settings-val,
+[data-theme="light"] .topbar-sub,
+[data-theme="light"] .msg-footer,
+[data-theme="light"] .msg-time,
+[data-theme="light"] .fc-meta,
+[data-theme="light"] .filter-banner,
+[data-theme="light"] .modal-sub,
+[data-theme="light"] .field-label,
+[data-theme="light"] .char-count,
+[data-theme="light"] .input-hint,
+[data-theme="light"] .empty-sub {
+  color: #667085 !important;
+}
+
+[data-theme="light"] .pd-action {
+  color: #475467 !important;
+}
+
+[data-theme="light"] .pd-action:hover {
+  background: #f2f4f7 !important;
+  color: #101828 !important;
+}
+
+[data-theme="light"] .pd-action.danger:hover {
+  background: #fff1f3 !important;
+  color: #e11d48 !important;
+}
+
+[data-theme="light"] .pd-theme-btn {
+  background: #f7f8fc !important;
+  color: #475467 !important;
+  border-color: rgba(20, 28, 45, 0.12) !important;
+}
+
+[data-theme="light"] .pd-theme-btn.active {
+  background: rgba(124, 92, 255, 0.10) !important;
+  color: #5b45d6 !important;
+  border-color: rgba(124, 92, 255, 0.45) !important;
+}
+
+[data-theme="light"] .stat-pill,
+[data-theme="light"] .file-card,
+[data-theme="light"] .upload-zone,
+[data-theme="light"] .empty-state,
+[data-theme="light"] .lcard,
+[data-theme="light"] .how-step {
+  background: #ffffff !important;
+  border-color: rgba(20, 28, 45, 0.10) !important;
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.08) !important;
+}
+
+[data-theme="light"] .file-card:hover {
+  background: #f8faff !important;
+  border-color: rgba(59, 130, 246, 0.35) !important;
+}
+
+[data-theme="light"] .file-card.active {
+  background: linear-gradient(135deg, rgba(124, 92, 255, 0.12), rgba(0, 212, 255, 0.08)), #ffffff !important;
+  border-color: rgba(124, 92, 255, 0.55) !important;
+}
+
+[data-theme="light"] .fc-badge,
+[data-theme="light"] .badge-structured,
+[data-theme="light"] .badge-unstructured {
+  background: rgba(124, 92, 255, 0.10) !important;
+  color: #5b45d6 !important;
+  border-color: rgba(124, 92, 255, 0.22) !important;
+}
+
+[data-theme="light"] .filter-banner {
+  background: #ffffff !important;
+  border-color: rgba(20, 28, 45, 0.10) !important;
+}
+
+[data-theme="light"] #filterFile {
+  color: #5b45d6 !important;
+}
+
+[data-theme="light"] .msg-bubble.bot-bubble,
+[data-theme="light"] .bot-bubble {
+  background: #ffffff !important;
+  color: #101828 !important;
+  border-color: rgba(20, 28, 45, 0.12) !important;
+  box-shadow: 0 14px 34px rgba(16, 24, 40, 0.08) !important;
+}
+
+[data-theme="light"] .msg-bubble.user-bubble,
+[data-theme="light"] .user-bubble {
+  background: linear-gradient(135deg, #6f58f5 0%, #3587ff 52%, #00a9d6 100%) !important;
+  color: #ffffff !important;
+}
+
+[data-theme="light"] .chunks-expander,
+[data-theme="light"] .sql-expander,
+[data-theme="light"] .data-card,
+[data-theme="light"] .data-table-wrap {
+  background: #ffffff !important;
+  color: #101828 !important;
+  border-color: rgba(20, 28, 45, 0.12) !important;
+}
+
+[data-theme="light"] .data-kv {
+  background: #f8faff !important;
+  border-color: rgba(20, 28, 45, 0.08) !important;
+}
+
+[data-theme="light"] .data-val,
+[data-theme="light"] .data-table td {
+  color: #101828 !important;
+}
+
+[data-theme="light"] .data-table th {
+  background: rgba(59, 130, 246, 0.08) !important;
+  color: #2563eb !important;
+}
+
+[data-theme="light"] .data-table td,
+[data-theme="light"] .data-table th {
+  border-color: rgba(20, 28, 45, 0.08) !important;
+}
+
+[data-theme="light"] .sql-code {
+  background: #f8faff !important;
+  color: #0369a1 !important;
+  border-color: rgba(20, 28, 45, 0.10) !important;
+}
+
+[data-theme="light"] .input-area {
+  background: linear-gradient(180deg, rgba(247,248,252,0), #f7f8fc 22%, #f7f8fc) !important;
+  border-color: rgba(20, 28, 45, 0.10) !important;
+}
+
+[data-theme="light"] .input-wrap,
+[data-theme="light"] .chat-input-wrap,
+[data-theme="light"] .composer,
+[data-theme="light"] .chat-composer {
+  background: #ffffff !important;
+  border-color: rgba(20, 28, 45, 0.14) !important;
+  box-shadow: 0 18px 42px rgba(16, 24, 40, 0.10) !important;
+}
+
+[data-theme="light"] #chatInput,
+[data-theme="light"] textarea {
+  color: #101828 !important;
+}
+
+[data-theme="light"] #chatInput::placeholder,
+[data-theme="light"] textarea::placeholder {
+  color: #98a2b3 !important;
+}
+
+[data-theme="light"] .btn-secondary,
+[data-theme="light"] .btn-ghost,
+[data-theme="light"] .btn-icon,
+[data-theme="light"] .nav-btn-ghost {
+  background: #ffffff !important;
+  color: #475467 !important;
+  border-color: rgba(20, 28, 45, 0.12) !important;
+}
+
+[data-theme="light"] .btn-secondary:hover,
+[data-theme="light"] .btn-ghost:hover,
+[data-theme="light"] .btn-icon:hover,
+[data-theme="light"] .nav-btn-ghost:hover {
+  background: #f2f4f7 !important;
+  color: #101828 !important;
+  border-color: rgba(59, 130, 246, 0.35) !important;
+}
+/* Light mode: user question bubble only */
+[data-theme="light"] .msg-bubble.user-bubble,
+[data-theme="light"] .user-bubble {
+  background: #eef2ff !important;
+  color: #1e1b4b !important;
+  border: 1px solid #c7d2fe !important;
+  box-shadow: 0 8px 22px rgba(79, 70, 229, 0.12) !important;
 }
