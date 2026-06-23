@@ -122,6 +122,7 @@ jobs:
             --function-name chatbot-run-dbt-after-glue \
             --environment "Variables={API_URL=${{ secrets.API_URL }},INTERNAL_API_KEY=${{ secrets.INTERNAL_API_KEY }},GLUE_JOB_NAME=structured-file-etl-job}"
 
+
           aws lambda wait function-updated-v2 \
             --function-name chatbot-run-dbt-after-glue
 
