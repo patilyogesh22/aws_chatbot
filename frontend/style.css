@@ -2583,3 +2583,45 @@ textarea::placeholder {
   border: 1px solid #c7d2fe !important;
   box-shadow: 0 8px 22px rgba(79, 70, 229, 0.12) !important;
 }
+/* FINAL CHAT SCROLL FIX - both dark and light mode */
+
+.main-wrap {
+  height: 100vh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.chat-area,
+#chatArea {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: auto !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  display: block !important;
+
+  /* space for top filter + bottom input */
+  padding-top: 1.2rem !important;
+  padding-bottom: 8.5rem !important;
+
+  scroll-padding-top: 1.5rem !important;
+  scroll-padding-bottom: 9rem !important;
+}
+
+.chat-thread {
+  min-height: max-content !important;
+  padding-bottom: 2rem !important;
+}
+
+.input-area {
+  flex-shrink: 0 !important;
+  position: sticky !important;
+  bottom: 0 !important;
+  z-index: 40 !important;
+}
+
+.filter-banner {
+  flex-shrink: 0 !important;
+}
