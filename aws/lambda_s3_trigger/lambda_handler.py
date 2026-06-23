@@ -209,6 +209,14 @@ def update_structured_dataset(
                         updated_at
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                    ON CONFLICT (user_id, document_id)
+                    DO UPDATE SET
+                        dataset_name = EXCLUDED.dataset_name,
+                        table_name = EXCLUDED.table_name,
+                        raw_s3_key = EXCLUDED.raw_s3_key,
+                        glue_job_run_id = EXCLUDED.glue_job_run_id,
+                        status = EXCLUDED.status,
+                        updated_at = NOW();
                 """, (
                     user_id,
                     document_id,
