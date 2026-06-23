@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DocChat · RAG Assistant</title>
+  <meta name="description" content="Chat with your documents using RAG, Groq LLM, and ChromaDB" />
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>" />
+</head>
+<body>
+
+<!-- ── Global progress bar ───────────────────────────────────── -->
+<div id="globalProgress"></div>
+
+<!-- ════════════════════════════════════════════════════════════
+     LANDING PAGE
+════════════════════════════════════════════════════════════ -->
+<div id="landing">
+
+  <!-- Ambient orbs -->
+  <div class="landing-orb orb1"></div>
+  <div class="landing-orb orb2"></div>
+  <div class="landing-orb orb3"></div>
+
+  <!-- Navbar -->
+  <nav class="landing-nav">
+    <div class="nav-brand">
+      <div class="nav-brand-logo">⚡</div>
+      <span class="nav-brand-name">DocChat</span>
+    </div>
+    <div class="nav-actions">
+      <button class="nav-btn-ghost" id="navSignIn">Sign in</button>
+      <button class="nav-btn-solid" id="navSignUp">Get started →</button>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <div class="landing-inner">
+    <div class="landing-eyebrow">
+      <span class="eyebrow-dot"></span>
+      RAG · Groq LLM · dbt · AWS · pgvector
+    </div>
+
+    <h1 class="landing-title clean-title">
+      Chat with your
+      <span class="grad">documents</span>
+      using AI
+    </h1>
+    <p class="landing-sub clean-sub">
+      Upload PDF, CSV, DOCX, XLSX, JSON or text files and get clear, grounded answers
+      from your private RAG and AWS data pipeline.
+    </p>
+
+    <!-- CTA buttons -->
+    <div style="display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap;margin-bottom:3rem">
+      <button class="btn btn-primary" id="heroSignUp" style="padding:0.75rem 2rem;font-size:0.95rem;letter-spacing:0.01em">
+        🚀 Get started free
+      </button>
+      <button class="btn btn-ghost" id="heroSignIn" style="padding:0.75rem 1.6rem;font-size:0.95rem">
+        Sign in →
+      </button>
+    </div>
+
+    <!-- Premium product preview -->
+    <div class="hero-preview" aria-label="DocChat interface preview">
+      <div class="preview-sidebar">
+        <div class="preview-dot-row"><span></span><span></span><span></span></div>
+        <div class="preview-file active">📊 revenue_q2.xlsx</div>
+        <div class="preview-file">📕 policy.pdf</div>
+        <div class="preview-file">📄 dbt_notes.md</div>
+      </div>
+      <div class="preview-chat">
+        <div class="preview-topline">Document Chat · grounded answers</div>
+        <div class="preview-msg user">What are the top insights?</div>
+        <div class="preview-msg bot">The document shows revenue growth, strong structured data quality, and clean dbt transformations ready for analytics.</div>
+        <div class="preview-pills"><span>3 sources</span><span>SQL ready</span><span>Vector search</span></div>
+      </div>
+    </div>
+
+    <!-- Feature cards -->
+    <div class="landing-cards">
+      <div class="lcard">
+        <div class="lcard-icon">⚡</div>
+        <div class="lcard-title">Instant Answers</div>
+        <div class="lcard-desc">Groq-powered sub-second LLM responses with exact source citations from your documents.</div>
+      </div>
+      <div class="lcard">
+        <div class="lcard-icon">🔍</div>
+        <div class="lcard-title">Semantic Search</div>
+        <div class="lcard-desc">ChromaDB vector embeddings surface the most relevant passages for every question you ask.</div>
+      </div>
+      <div class="lcard">
+        <div class="lcard-icon">📊</div>
+        <div class="lcard-title">Structured + RAG</div>
+        <div class="lcard-desc">PDF & DOCX via RAG pipeline. CSV & XLSX via AWS Glue → RDS → dbt NL-to-SQL.</div>
+      </div>
+      <div class="lcard">
+        <div class="lcard-icon">🔐</div>
+        <div class="lcard-title">Private & Isolated</div>
+        <div class="lcard-desc">JWT authentication with per-user document isolation. Your files are yours alone.</div>
+      </div>
+      <div class="lcard">
+        <div class="lcard-icon">☁️</div>
+        <div class="lcard-title">AWS Native</div>
+        <div class="lcard-desc">S3 for storage, Glue for ETL, RDS PostgreSQL for persistence and analytics.</div>
+      </div>
+      <div class="lcard">
+        <div class="lcard-icon">💾</div>
+        <div class="lcard-title">Persistent History</div>
+        <div class="lcard-desc">Every conversation saved per document. Click a file to resume exactly where you left off.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- How it works -->
+  <div class="how-section">
+    <div class="how-title">How it works</div>
+    <div class="how-sub">Four steps from upload to answer</div>
+    <div class="how-steps">
+      <div class="how-step">
+        <div class="how-step-num">STEP 01</div>
+        <div class="how-step-icon">📤</div>
+        <div class="how-step-label">Upload</div>
+        <div class="how-step-desc">Drop any file — PDF, CSV, DOCX, XLSX. Stored securely in AWS S3.</div>
+      </div>
+      <div class="how-step">
+        <div class="how-step-num">STEP 02</div>
+        <div class="how-step-icon">⚙️</div>
+        <div class="how-step-label">Process</div>
+        <div class="how-step-desc">Auto-detected as structured or unstructured. Chunked, embedded, or loaded via Glue.</div>
+      </div>
+      <div class="how-step">
+        <div class="how-step-num">STEP 03</div>
+        <div class="how-step-icon">💬</div>
+        <div class="how-step-label">Ask</div>
+        <div class="how-step-desc">Type any question in plain English. No SQL or query language needed.</div>
+      </div>
+      <div class="how-step">
+        <div class="how-step-num">STEP 04</div>
+        <div class="how-step-icon">✅</div>
+        <div class="how-step-label">Get Answers</div>
+        <div class="how-step-desc">Groq LLM returns grounded answers with source citations in milliseconds.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tech strip -->
+  <div class="tech-strip">
+    <span class="tech-tag">FastAPI</span>
+    <span class="tech-tag">Groq LLM</span>
+    <span class="tech-tag">ChromaDB</span>
+    <span class="tech-tag">PostgreSQL</span>
+    <span class="tech-tag">dbt</span>
+    <span class="tech-tag">AWS S3</span>
+    <span class="tech-tag">AWS Glue</span>
+    <span class="tech-tag">JWT Auth</span>
+    <span class="tech-tag">pgvector</span>
+  </div>
+
+  <!-- Footer -->
+  <div class="landing-footer">
+    Built with ❤️ by <strong>Yogesh Patil</strong> · DocChat v3.2 · RAG + NL-to-SQL on AWS
+  </div>
+
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     AUTH MODALS
+════════════════════════════════════════════════════════════ -->
+
+<!-- Login -->
+<div class="modal-overlay" id="loginModal">
+  <div class="modal-box">
+    <div class="modal-progress" id="loginProgress">
+      <div class="modal-progress-fill"></div>
+    </div>
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Welcome back 👋</div>
+        <div class="modal-sub">Sign in to access your documents</div>
+      </div>
+      <button class="modal-close" id="loginModalClose">✕</button>
+    </div>
+    <form class="modal-body" id="loginForm" autocomplete="off">
+      <div>
+        <div class="field-label">Email address</div>
+        <input class="field-input" type="email" id="loginEmail" placeholder="you@example.com" required />
+      </div>
+      <div>
+        <div class="field-label">Password</div>
+        <input class="field-input" type="password" id="loginPassword" placeholder="••••••••" required />
+      </div>
+      <div class="auth-error" id="loginError"></div>
+      <button type="submit" class="btn btn-primary btn-full">Sign in →</button>
+    </form>
+    <div class="modal-footer">
+      Don't have an account? <a id="switchToRegister">Create one free</a>
+    </div>
+  </div>
+</div>
+
+<!-- Register -->
+<div class="modal-overlay" id="registerModal">
+  <div class="modal-box">
+    <div class="modal-progress" id="registerProgress">
+      <div class="modal-progress-fill"></div>
+    </div>
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Create your account ✨</div>
+        <div class="modal-sub">Free forever · No credit card needed</div>
+      </div>
+      <button class="modal-close" id="registerModalClose">✕</button>
+    </div>
+    <form class="modal-body" id="registerForm" autocomplete="off">
+      <div>
+        <div class="field-label">Full name</div>
+        <input class="field-input" type="text" id="regName" placeholder="Yogesh Patil" required />
+      </div>
+      <div>
+        <div class="field-label">Email address</div>
+        <input class="field-input" type="email" id="regEmail" placeholder="you@example.com" required />
+      </div>
+      <div>
+        <div class="field-label">Password</div>
+        <input class="field-input" type="password" id="regPassword" placeholder="Min. 8 characters" required />
+      </div>
+      <div class="auth-error" id="registerError"></div>
+      <button type="submit" class="btn btn-primary btn-full">Create account →</button>
+    </form>
+    <div class="modal-footer">
+      Already have an account? <a id="switchToLogin">Sign in</a>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     DELETE CONFIRM MODAL
+════════════════════════════════════════════════════════════ -->
+<div class="confirm-overlay" id="confirmOverlay">
+  <div class="confirm-box">
+    <div class="confirm-icon">🗑️</div>
+    <div class="confirm-title">Remove Document?</div>
+    <div class="confirm-msg">
+      This will permanently delete<br>
+      <span class="confirm-filename" id="confirmFileName"></span><br>
+      from your documents and vector store.
+    </div>
+    <div class="confirm-actions">
+      <button class="btn btn-secondary" id="confirmCancel">Cancel</button>
+      <button class="btn btn-danger" id="confirmDelete">Yes, Remove</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     APP SHELL
+════════════════════════════════════════════════════════════ -->
+<div id="appShell" class="hidden">
+
+  <!-- ── Sidebar ─────────────────────────────────────────────── -->
+  <aside class="sidebar">
+
+    <!-- Brand -->
+    <div class="sidebar-brand">
+      <div class="sidebar-logo">⚡</div>
+      <div>
+        <div class="sidebar-brand-name">DocChat</div>
+        <div class="sidebar-brand-sub">RAG · Groq · dbt</div>
+      </div>
+    </div>
+
+    <!-- Scrollable content -->
+    <div class="sidebar-scroll">
+
+      <!-- Stats -->
+      <div class="section-label">Overview</div>
+      <div class="stats-row">
+        <div class="stat-pill">
+          <div class="stat-val" id="statFiles">—</div>
+          <div class="stat-lbl">Files</div>
+        </div>
+        <div class="stat-pill">
+          <div class="stat-val" id="statChunks">—</div>
+          <div class="stat-lbl">Chunks</div>
+        </div>
+        <div class="stat-pill">
+          <div class="stat-val" id="statVectors">—</div>
+          <div class="stat-lbl">Vectors</div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Upload -->
+      <div class="section-label">Upload Document</div>
+      <div class="upload-zone" id="uploadZone">
+        <input type="file" id="uploadInput"
+          accept=".pdf,.docx,.txt,.md,.pptx,.csv,.xlsx,.xls,.json" />
+        <div class="upload-icon">📁</div>
+        <div class="upload-label">Drop file or click to browse</div>
+        <div class="upload-sub">PDF · DOCX · CSV · XLSX · JSON · MD · PPTX</div>
+      </div>
+
+      <!-- Pending upload -->
+      <div class="upload-pending hidden" id="uploadPending">
+        <span class="upload-pending-name" id="uploadPendingName"></span>
+        <button class="btn btn-primary btn-sm" id="ingestBtn">⬆ Ingest</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Documents -->
+      <div class="section-label">Documents</div>
+      <div id="fileList"></div>
+
+      <div class="divider"></div>
+
+      <!-- Settings -->
+      <div class="section-label">Settings</div>
+
+      <div class="settings-row">
+        <span class="settings-label">Chunks to retrieve</span>
+        <span class="settings-val" id="topKDisplay">5</span>
+      </div>
+      <input type="range" class="slider" id="topKSlider" min="1" max="10" value="5" />
+
+      <div class="toggle-wrap" style="margin-top:0.35rem">
+        <span class="settings-label">Show source chunks</span>
+        <div class="toggle" id="chunksToggle">
+          <div class="toggle-knob"></div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Actions -->
+      <div class="sidebar-actions">
+        <button class="btn btn-secondary btn-sm" id="dbtBtn">⟳ Run dbt</button>
+        <button class="btn btn-secondary btn-sm" id="clearChatBtn">✕ Clear chat</button>
+      </div>
+
+    </div><!-- /sidebar-scroll -->
+  </aside>
+
+  <!-- ── Topbar ───────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="topbar-title-wrap">
+      <div class="topbar-title">Document Chat</div>
+      <div class="topbar-sub">Ask anything about your uploaded documents — answers grounded in your content</div>
+    </div>
+    <div class="topbar-right">
+
+      <!-- DB status pill -->
+      <div class="db-pill">
+        <span class="dot dot-ok" id="dbDot"></span>
+        <span id="dbText">DB</span>
+      </div>
+
+      <!-- Clear chat -->
+      <button class="btn-icon" id="topClearBtn" title="Clear chat">🗑</button>
+
+      <!-- Profile avatar -->
+      <div class="profile-wrap">
+        <div class="profile-avatar" id="profileAvatar" title="Account">YP</div>
+
+        <div class="profile-dropdown" id="profileDropdown">
+          <div class="pd-header">
+            <div class="pd-avatar" id="pdAvatar">YP</div>
+            <div>
+              <div class="pd-name" id="pdName">–</div>
+              <div class="pd-email" id="pdEmail">–</div>
+            </div>
+          </div>
+
+          <div class="pd-section">
+            <div class="pd-section-label">Theme</div>
+            <div class="pd-theme-row">
+              <button class="pd-theme-btn active" id="pdDarkBtn">🌙 Dark</button>
+              <button class="pd-theme-btn" id="pdLightBtn">☀️ Light</button>
+            </div>
+          </div>
+
+          <div style="padding:0.35rem 0">
+            <div class="pd-action danger" id="pdLogout">
+              <span class="pd-action-icon">🚪</span>
+              Sign out
+            </div>
+          </div>
+        </div>
+
+        <div class="profile-overlay" id="profileOverlay"></div>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ── Main content ─────────────────────────────────────────── -->
+  <main class="main-wrap">
+
+    <!-- Filter banner -->
+    <div class="filter-banner hidden" id="filterBanner">
+      <span class="filter-banner-icon">🔍</span>
+      Scoped to: <span class="filter-file" id="filterFile"></span>
+      <span class="filter-sub">· Answers limited to this document</span>
+      <button class="filter-clear" id="filterClear" title="Clear filter">✕</button>
+    </div>
+
+    <!-- Chat area -->
+    <div class="chat-area" id="chatArea">
+
+      <!-- Empty state -->
+      <div class="empty-state" id="emptyState">
+        <div class="empty-glow-icon">⚡</div>
+        <div class="empty-title">Ask anything about your docs</div>
+        <div class="empty-sub">
+          Select a document from the sidebar,<br>
+          then type your question below.
+        </div>
+        <div class="suggestion-chips">
+          <span class="chip">📊 Summarize this document</span>
+          <span class="chip">🔍 What are the key findings?</span>
+          <span class="chip">📋 List the main topics</span>
+          <span class="chip">❓ What data is available?</span>
+        </div>
+      </div>
+
+    </div><!-- /chat-area -->
+
+    <!-- Input area -->
+    <div class="input-area">
+      <div class="input-wrap">
+        <textarea
+          id="chatInput"
+          placeholder="Ask a question about your documents…"
+          rows="1"
+          autocomplete="off"
+          spellcheck="true"
+        ></textarea>
+        <span class="char-count" id="charCount">0</span>
+        <button class="send-btn" id="sendBtn" title="Send (Enter)">➤</button>
+      </div>
+      <div class="input-hint">
+        Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line
+      </div>
+    </div>
+
+  </main>
+</div><!-- /appShell -->
+
+<!-- Toast container -->
+<div id="toastContainer"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -45,10 +45,7 @@ docker/.env.backup
 # Ignore local DBT profiles containing passwords
 docker/profiles.yml
 aws/profiles.yml
-frontend/index.html
-frontend/style.css
-frontend/app.js
-frontend/index12.html
+
 
 # ==========================
 # Logs
