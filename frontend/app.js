@@ -15,7 +15,10 @@
 ═══════════════════════════════════════════════════════════════ */
 
 const API_URL = window.__API_URL__ || '/api';
-
+// const API_URL =
+//   location.hostname === "localhost" || location.hostname === "127.0.0.1"
+//     ? "http://localhost:8000"
+//     : "/api";
 /* ─────────────────────────────────────────────────────────────
    STATE
 ───────────────────────────────────────────────────────────── */
@@ -365,6 +368,7 @@ async function loadHistoryForFile(fileName) {
    CHAT RENDER
 ───────────────────────────────────────────────────────────── */
 const chatArea = document.getElementById('chatArea');
+const chatThread = document.getElementById('chatThread') || chatArea;
 const emptyState = document.getElementById('emptyState');
 
 function clearChat() {
@@ -373,16 +377,71 @@ function clearChat() {
 }
 
 function renderMessages() {
-  chatArea.innerHTML = '';
+  chatThread.innerHTML = '';
   if (!state.messages.length) {
-    chatArea.appendChild(emptyState);
+    chatThread.appendChild(emptyState);
     return;
   }
   if (emptyState.parentNode) emptyState.parentNode.removeChild(emptyState);
-  state.messages.forEach(msg => chatArea.appendChild(buildMsgEl(msg)));
+  state.messages.forEach(msg => chatThread.appendChild(buildMsgEl(msg)));
   scrollBottom();
 }
+function formatKey(k) {
+  return String(k || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
 
+function formatVal(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  return escapeHtml(String(v));
+}
+
+function isStructuredMsg(msg) {
+  return msg.role === 'assistant' && (msg.file_type === 'structured' || msg.sql || msg.rows?.length);
+}
+
+function buildStructuredResult(msg) {
+  if (!msg.rows || !msg.rows.length) return '';
+
+  const rows = msg.rows;
+  const columns = msg.columns || Object.keys(rows[0] || {});
+
+  if (rows.length === 1) {
+    return `
+      <div class="data-card">
+        <div class="data-card-title">Result Details</div>
+        <div class="data-card-grid">
+          ${columns.map(c => `
+            <div class="data-kv">
+              <div class="data-key">${escapeHtml(formatKey(c))}</div>
+              <div class="data-val">${formatVal(rows[0][c])}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="data-table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            ${columns.map(c => `<th>${escapeHtml(formatKey(c))}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              ${columns.map(c => `<td>${formatVal(r[c])}</td>`).join('')}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
 function buildMsgEl(msg) {
   const row = document.createElement('div');
   row.className = 'msg-row ' + msg.role;
@@ -404,7 +463,15 @@ function buildMsgEl(msg) {
   // Bubble
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble ' + (msg.role === 'user' ? 'user-bubble' : 'bot-bubble');
-  bubble.innerHTML = escapeHtml(msg.content || '').replace(/\n/g, '<br>');
+  if (msg.role === 'assistant' && isStructuredMsg(msg)) {
+    bubble.innerHTML = `
+      <div class="answer-text">${escapeHtml(msg.content || '').replace(/\n/g, '<br>')}</div>
+      ${buildStructuredResult(msg)}
+    `;
+  } else {
+    bubble.innerHTML = escapeHtml(msg.content || '').replace(/\n/g, '<br>');
+  }
+
   body.appendChild(bubble);
 
   // Footer
@@ -469,7 +536,7 @@ function buildMsgEl(msg) {
 function addMessage(msg) {
   state.messages.push(msg);
   if (emptyState.parentNode) emptyState.parentNode.removeChild(emptyState);
-  chatArea.appendChild(buildMsgEl(msg));
+  chatThread.appendChild(buildMsgEl(msg));
   scrollBottom();
 }
 
@@ -492,7 +559,7 @@ function showTyping() {
   typingEl.className = 'typing-row';
   typingEl.appendChild(botAv);
   typingEl.appendChild(bubble);
-  chatArea.appendChild(typingEl);
+  chatThread.appendChild(typingEl);
   scrollBottom();
 }
 function hideTyping() {
@@ -590,6 +657,8 @@ async function sendMessage() {
       table_name: data.table_name || null,
       row_count:  data.row_count  ?? null,
       file_type:  data.file_type  || null,
+      rows:       data.rows       || [],
+      columns:    data.columns    || [],
     });
   } else {
     addMessage({

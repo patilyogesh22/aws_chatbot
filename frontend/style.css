@@ -2157,3 +2157,155 @@ textarea::placeholder {
     font-size: 0.9rem !important;
   }
 }
+/* ChatGPT/DataGPT layout */
+.chat-area {
+  padding: 0 !important;
+}
+
+.chat-thread {
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 8rem;
+}
+
+.msg-row {
+  width: 100%;
+  margin-bottom: 1.8rem !important;
+}
+
+.msg-row.user {
+  justify-content: flex-end;
+}
+
+.msg-row.assistant {
+  justify-content: flex-start;
+}
+
+.msg-body {
+  max-width: 100% !important;
+  width: 100%;
+}
+
+.msg-row.user .msg-body {
+  max-width: 72% !important;
+  width: auto;
+}
+
+.msg-row.assistant .msg-body {
+  max-width: 100% !important;
+}
+
+.msg-bubble.bot-bubble {
+  max-width: 100% !important;
+  width: 100%;
+  border-radius: 18px !important;
+}
+
+.msg-bubble.user-bubble {
+  max-width: 100% !important;
+}
+
+.answer-text {
+  margin-bottom: 1rem;
+}
+
+.data-card {
+  margin-top: 1rem;
+  background: rgba(10, 13, 20, 0.55);
+  border: 1px solid rgba(191,199,213,0.14);
+  border-radius: 16px;
+  padding: 1rem;
+}
+
+.data-card-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 800;
+  margin-bottom: 0.9rem;
+  color: var(--accent2);
+}
+
+.data-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.data-kv {
+  background: rgba(255,255,255,0.035);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  padding: 0.65rem 0.75rem;
+}
+
+.data-key {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.25rem;
+}
+
+.data-val {
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.data-table-wrap {
+  margin-top: 1rem;
+  overflow-x: auto;
+  border: 1px solid rgba(191,199,213,0.14);
+  border-radius: 16px;
+  background: rgba(10,13,20,0.55);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.data-table th {
+  text-align: left;
+  color: var(--accent2);
+  font-weight: 800;
+  background: rgba(34,211,238,0.08);
+  padding: 0.75rem;
+  white-space: nowrap;
+  border-bottom: 1px solid rgba(191,199,213,0.14);
+}
+
+.data-table td {
+  padding: 0.7rem 0.75rem;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(191,199,213,0.08);
+  white-space: nowrap;
+}
+
+.data-table tr:last-child td {
+  border-bottom: none;
+}
+
+.chunks-toggle {
+  margin-top: 0.75rem;
+}
+
+.sql-expander {
+  width: 100%;
+}
+
+@media (max-width: 760px) {
+  .chat-thread {
+    padding: 1rem 0.8rem 7rem;
+  }
+
+  .msg-row.user .msg-body {
+    max-width: 92% !important;
+  }
+
+  .data-card-grid {
+    grid-template-columns: 1fr;
+  }
+}

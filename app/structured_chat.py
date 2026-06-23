@@ -501,6 +501,7 @@ def answer_structured_question(
         "sql": final_sql,
         "table_name": table_name,
         "rows": result["rows"][:20],
+        "columns": result["columns"],
         "row_count": result["row_count"],
         "file_type": "structured",
         "sources": [file_name],
