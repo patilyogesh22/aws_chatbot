@@ -237,6 +237,12 @@ async def upload_file(
                             status
                         )
                         VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (user_id, document_id)
+                        DO UPDATE SET
+                            file_name = EXCLUDED.file_name,
+                            raw_s3_key = EXCLUDED.raw_s3_key,
+                            status = EXCLUDED.status,
+                            updated_at = NOW()
                     """, (
                         current_user["id"],
                         document_id,
@@ -254,10 +260,6 @@ async def upload_file(
                 "file": original_filename,
                 "s3_key": s3_key,
                 "file_size": file_size,
-                "chunks": 0,
-                "embedded": 0,
-                "next_step": "Lambda → Glue Job → RDS → NL-to-SQL",
-                "dbt_status": "Skipped for structured file upload"
             }
 
         chunks = ingest_file_from_s3_key(
