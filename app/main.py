@@ -7,25 +7,34 @@ Login/Register
 → Detect file type
     ├── structured: CSV / XLSX / XLS / JSON
     │       → S3 uploads/user_{id}/structured/file.csv
-    │       → Lambda S3 trigger → Glue Job → RDS
+    │       → Lambda S3 trigger → Glue Job → RDS isolated table
     │       → NL-to-SQL structured chat
     └── unstructured: PDF / DOCX / TXT / MD / PPTX
             → S3 → Text extraction → raw_chunks with user_id
             → dbt → Pgvector embeddings with user_id
             → user-specific RAG chat
+
+Fixes included:
+1. Structured files are isolated per user/document through structured_datasets.table_name.
+2. Delete removes file data from S3, chunks, pgvector, structured dataset tables,
+   file_upload_events, chat_history, and app_documents.
+3. Keeps pgvector health/stats and structured chat history rows/columns.
 """
 
 import os
+import re
+import json
 import hashlib
 import subprocess
 from typing import Optional
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+
 import psycopg2
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import json
+
 from app.config import DATA_RAW_DIR, DBT_PROJECT_DIR, PG_DSN
 from aws.s3_ingestion import upload_fileobj_to_s3, delete_s3_object
 from app.file_classifier import classify_file
@@ -40,7 +49,6 @@ from app.ingestion import (
     ingest_file_from_s3_key,
     delete_file_chunks,
     init_postgres,
-
 )
 
 from app.embeddings import (
@@ -60,7 +68,7 @@ INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 app = FastAPI(
     title="RAG Chatbot API Authenticated",
-    version="3.2.0"
+    version="3.5.0"
 )
 
 app.include_router(auth_router)
@@ -81,13 +89,92 @@ def startup():
     init_auth_tables()
     init_postgres()
     init_pgvector()
+    _init_extra_tables()
+
+
+def _init_extra_tables():
+    """
+    Safe startup migration for structured metadata and chat history columns.
+    This keeps old databases compatible with the new isolated structured table flow.
+    """
+    with psycopg2.connect(PG_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS structured_datasets (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    document_id INTEGER,
+                    file_name TEXT NOT NULL,
+                    raw_s3_key TEXT,
+                    table_name TEXT,
+                    dataset_name TEXT,
+                    glue_job_run_id TEXT,
+                    schema_json JSONB,
+                    sample_json JSONB,
+                    row_count INTEGER,
+                    status TEXT DEFAULT 'glue_job_pending',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS file_upload_events (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER,
+                    file_name TEXT,
+                    s3_key TEXT,
+                    bucket_name TEXT,
+                    file_size BIGINT,
+                    file_type TEXT,
+                    document_id INTEGER,
+                    dataset_name TEXT,
+                    status TEXT,
+                    table_name TEXT,
+                    glue_job_run_id TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+
+            migrations = [
+                "ALTER TABLE structured_datasets ADD COLUMN IF NOT EXISTS table_name TEXT",
+                "ALTER TABLE structured_datasets ADD COLUMN IF NOT EXISTS schema_json JSONB",
+                "ALTER TABLE structured_datasets ADD COLUMN IF NOT EXISTS sample_json JSONB",
+                "ALTER TABLE structured_datasets ADD COLUMN IF NOT EXISTS row_count INTEGER",
+                "ALTER TABLE structured_datasets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()",
+                "ALTER TABLE structured_datasets ADD COLUMN IF NOT EXISTS dataset_name TEXT",
+                "ALTER TABLE structured_datasets ADD COLUMN IF NOT EXISTS glue_job_run_id TEXT",
+                "ALTER TABLE app_documents ADD COLUMN IF NOT EXISTS file_type TEXT DEFAULT 'unstructured'",
+                "ALTER TABLE app_documents ADD COLUMN IF NOT EXISTS s3_key TEXT",
+                "ALTER TABLE app_documents ADD COLUMN IF NOT EXISTS file_size BIGINT",
+                "ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS generated_sql TEXT",
+                "ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS table_name TEXT",
+                "ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS file_type TEXT",
+                "ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS result_rows JSONB DEFAULT '[]'::jsonb",
+                "ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS result_columns JSONB DEFAULT '[]'::jsonb",
+                "ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS row_count INTEGER",
+                "ALTER TABLE file_upload_events ADD COLUMN IF NOT EXISTS table_name TEXT",
+                "ALTER TABLE file_upload_events ADD COLUMN IF NOT EXISTS glue_job_run_id TEXT",
+                "ALTER TABLE file_upload_events ADD COLUMN IF NOT EXISTS document_id INTEGER",
+            ]
+
+            for sql in migrations:
+                cur.execute(sql)
+
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_structured_datasets_user_document
+                ON structured_datasets(user_id, document_id)
+                WHERE document_id IS NOT NULL
+            """)
+
+        conn.commit()
 
 
 @app.get("/")
 def root():
     return {
         "message": "Authenticated RAG + Structured SQL Chatbot API running 🚀",
-        "version": "3.2.0"
+        "version": "3.5.0"
     }
 
 
@@ -104,20 +191,18 @@ def health():
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
         status["postgres"] = "ok"
-
     except Exception as e:
         status["postgres"] = f"error: {e}"
 
     try:
         stats = collection_stats()
-
         status["pgvector"] = "ok"
         status["total_vectors"] = stats.get("total_vectors", 0)
-
     except Exception as e:
         status["pgvector"] = f"error: {e}"
 
     return status
+
 
 @app.post("/upload")
 async def upload_file(
@@ -256,6 +341,28 @@ async def upload_file(
                         "glue_job_pending"
                     ))
 
+                    cur.execute("""
+                        INSERT INTO file_upload_events
+                        (
+                            user_id,
+                            file_name,
+                            s3_key,
+                            file_size,
+                            file_type,
+                            document_id,
+                            status
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        current_user["id"],
+                        original_filename,
+                        s3_key,
+                        file_size,
+                        "structured",
+                        document_id,
+                        "glue_job_pending"
+                    ))
+
                 conn.commit()
 
             return {
@@ -265,6 +372,8 @@ async def upload_file(
                 "file": original_filename,
                 "s3_key": s3_key,
                 "file_size": file_size,
+                "document_id": document_id,
+                "next_step": "Lambda → Glue Job → isolated RDS table → NL-to-SQL"
             }
 
         chunks = ingest_file_from_s3_key(
@@ -382,7 +491,12 @@ def chat(
                     "chunks": [],
                     "sources": [req.file_name],
                     "chunks_used": 0,
-                    "file_type": "structured"
+                    "file_type": "structured",
+                    "sql": None,
+                    "table_name": None,
+                    "row_count": 0,
+                    "rows": [],
+                    "columns": [],
                 }
 
     chunks = retrieve(
@@ -487,11 +601,29 @@ def list_files(current_user: dict = Depends(get_current_user)):
         }
 
 
+def _safe_drop_table(cur, table_name: str) -> bool:
+    """
+    Drop only internally generated table names, e.g. u1_d48_employee_master_prod.
+    This prevents accidental SQL injection or dropping arbitrary tables.
+    """
+    if not table_name:
+        return False
+
+    if not re.fullmatch(r"u\d+_d\d+_[a-z0-9_]+", table_name):
+        print(f"[delete] Skipping unsafe table name: {table_name}")
+        return False
+
+    cur.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+    return True
+
+
 @app.delete("/files/{file_name}")
 def delete_file(
     file_name: str,
     current_user: dict = Depends(get_current_user)
 ):
+    user_id = current_user["id"]
+
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -501,7 +633,7 @@ def delete_file(
                   AND file_name = %s
                 LIMIT 1
             """, (
-                current_user["id"],
+                user_id,
                 file_name
             ))
 
@@ -511,32 +643,162 @@ def delete_file(
         raise HTTPException(status_code=404, detail="File not found")
 
     document_id, file_type, s3_key = doc
-
-    delete_file_chunks(current_user["id"], file_name)
-    delete_file_embeddings(current_user["id"], file_name)
+    deleted = {}
 
     if s3_key:
-        delete_s3_object(s3_key)
+        try:
+            delete_s3_object(s3_key)
+            deleted["s3"] = True
+        except Exception as e:
+            deleted["s3"] = f"error: {e}"
+    else:
+        deleted["s3"] = False
+
+    try:
+        delete_file_chunks(user_id, file_name)
+        deleted["delete_file_chunks"] = True
+    except Exception as e:
+        deleted["delete_file_chunks"] = f"error: {e}"
+
+    try:
+        delete_file_embeddings(user_id, file_name)
+        deleted["document_embeddings"] = True
+    except Exception as e:
+        deleted["document_embeddings"] = f"error: {e}"
 
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
+            # Extra-safe deletes for tables not covered by helper functions.
+            cur.execute("""
+                DELETE FROM raw_chunks
+                WHERE user_id = %s
+                  AND document_id = %s
+            """, (user_id, document_id))
+            deleted["raw_chunks"] = cur.rowcount
+
+            try:
+                cur.execute("""
+                    DELETE FROM mart_processed_chunks
+                    WHERE user_id = %s
+                      AND document_id = %s
+                """, (user_id, document_id))
+                deleted["mart_processed_chunks"] = cur.rowcount
+            except Exception as e:
+                conn.rollback()
+                deleted["mart_processed_chunks"] = f"skipped/error: {e}"
+
+            try:
+                cur.execute("""
+                    DELETE FROM document_embeddings
+                    WHERE user_id = %s
+                      AND document_id = %s
+                """, (user_id, document_id))
+                deleted["document_embeddings_rows"] = cur.rowcount
+            except Exception as e:
+                conn.rollback()
+                deleted["document_embeddings_rows"] = f"skipped/error: {e}"
+
+            dropped_tables = []
+            if file_type == "structured":
+                cur.execute("""
+                    SELECT table_name
+                    FROM structured_datasets
+                    WHERE user_id = %s
+                      AND document_id = %s
+                      AND table_name IS NOT NULL
+                """, (user_id, document_id))
+
+                for (table_name,) in cur.fetchall():
+                    try:
+                        if _safe_drop_table(cur, table_name):
+                            dropped_tables.append(table_name)
+                    except Exception as e:
+                        print(f"[delete] DROP TABLE failed for {table_name}: {e}")
+                        conn.rollback()
+
+                cur.execute("""
+                    DELETE FROM structured_datasets
+                    WHERE user_id = %s
+                      AND document_id = %s
+                """, (user_id, document_id))
+                deleted["structured_datasets"] = cur.rowcount
+                deleted["rds_tables_dropped"] = dropped_tables
+
+            cur.execute("""
+                DELETE FROM file_upload_events
+                WHERE user_id = %s
+                  AND document_id = %s
+            """, (user_id, document_id))
+            deleted["file_upload_events"] = cur.rowcount
+
+            cur.execute("""
+                DELETE FROM chat_history
+                WHERE user_id = %s
+                  AND file_name = %s
+            """, (user_id, file_name))
+            deleted["chat_history"] = cur.rowcount
+
             cur.execute("""
                 DELETE FROM app_documents
                 WHERE user_id = %s
                   AND id = %s
-            """, (
-                current_user["id"],
-                document_id
-            ))
+            """, (user_id, document_id))
+            deleted["app_documents"] = cur.rowcount
 
         conn.commit()
 
     return {
         "status": "deleted",
-        "user_id": current_user["id"],
+        "user_id": user_id,
         "file": file_name,
         "file_type": file_type,
-        "s3_deleted": bool(s3_key)
+        "document_id": document_id,
+        "deleted": deleted,
+    }
+
+
+@app.get("/structured/status/{file_name}")
+def structured_status(
+    file_name: str,
+    current_user: dict = Depends(get_current_user)
+):
+    with psycopg2.connect(PG_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT status, table_name, row_count, glue_job_run_id, updated_at
+                FROM structured_datasets
+                WHERE user_id = %s
+                  AND file_name = %s
+                ORDER BY id DESC
+                LIMIT 1
+            """, (current_user["id"], file_name))
+            row = cur.fetchone()
+
+    if not row:
+        return {
+            "file_name": file_name,
+            "status": "not_found",
+            "ready": False,
+            "message": "File not found. Please upload it first.",
+        }
+
+    status, table_name, row_count, run_id, updated_at = row
+    messages = {
+        "glue_job_pending": "File uploaded. Waiting for AWS Glue to start…",
+        "glue_job_started": "AWS Glue is processing your file (1–3 min)…",
+        "ready": "File is ready. You can ask questions now.",
+        "error": "Processing failed. Please re-upload the file.",
+    }
+
+    return {
+        "file_name": file_name,
+        "status": status,
+        "ready": status == "ready",
+        "table_name": table_name,
+        "row_count": row_count,
+        "glue_job_run_id": run_id,
+        "updated_at": updated_at.isoformat() if updated_at else None,
+        "message": messages.get(status, f"Status: {status}"),
     }
 
 
@@ -610,6 +872,8 @@ def get_history(
             for r in rows
         ]
     }
+
+
 @app.get("/stats")
 def stats(current_user: dict = Depends(get_current_user)):
     base = collection_stats(user_id=current_user["id"])
@@ -663,6 +927,7 @@ def stats(current_user: dict = Depends(get_current_user)):
 
     return base
 
+
 @app.post("/dbt/run")
 def run_dbt(current_user: dict = Depends(get_current_user)):
     return {
@@ -705,3 +970,47 @@ def _run_dbt():
         return f"dbt error: {str(e)}"
 
 
+class StructuredReadyRequest(BaseModel):
+    user_id: int
+    document_id: int
+    table_name: str
+    status: str = "ready"
+
+
+@app.post("/internal/structured/mark-ready")
+def mark_structured_ready(
+    req: StructuredReadyRequest,
+    x_internal_api_key: str = Header(None)
+):
+    if not INTERNAL_API_KEY:
+        raise HTTPException(status_code=500, detail="INTERNAL_API_KEY not set")
+
+    if x_internal_api_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid internal API key")
+
+    with psycopg2.connect(PG_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE structured_datasets
+                SET
+                    status = %s,
+                    table_name = %s,
+                    updated_at = NOW()
+                WHERE user_id = %s
+                  AND document_id = %s
+            """, (
+                req.status,
+                req.table_name,
+                req.user_id,
+                req.document_id,
+            ))
+
+        conn.commit()
+
+    return {
+        "status": "updated",
+        "user_id": req.user_id,
+        "document_id": req.document_id,
+        "table_name": req.table_name,
+        "new_status": req.status,
+    }

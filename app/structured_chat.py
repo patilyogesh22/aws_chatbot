@@ -1,8 +1,20 @@
+"""
+app/structured_chat.py
+Secure structured NL-to-SQL over per-upload RDS tables.
+
+Fixes:
+- Same file name can be uploaded by multiple users.
+- Uses structured_datasets table_name for the logged-in user only.
+- Uses user_id + document_id filters in generated SQL.
+- Hides Glue/system columns from user-facing schema and result tables.
+- Supports saved schema_json/sample_json from Glue, with fallback to information_schema.
+"""
+
 import json
 import re
 from decimal import Decimal
-from typing import Dict, List, Tuple
-
+from typing import Dict, List, Optional
+from datetime import date, datetime
 import psycopg2
 from groq import Groq
 
@@ -22,11 +34,11 @@ MAX_ROWS_RETURNED = 100
 
 
 def quote_ident(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
+    return '"' + str(name).replace('"', '""') + '"'
 
 
 def clean_llm_sql(sql: str) -> str:
-    sql = sql.strip()
+    sql = (sql or "").strip()
     sql = sql.replace("```sql", "").replace("```", "").strip()
     sql = sql.rstrip(";").strip()
     return sql
@@ -41,32 +53,91 @@ def is_numeric_sample(value) -> bool:
     except Exception:
         return False
 
+def make_json_safe(value):
+    if isinstance(value, Decimal):
+        return float(value)
+
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+
+    return value
 
 def get_structured_table(user_id: int, file_name: str) -> Dict:
+    """
+    Return the structured table for this exact logged-in user's selected file.
+
+    Important:
+    Glue now creates unique table names such as:
+        u1_d48_employee_master_prod
+        u2_d55_employee_master_prod
+
+    So two users can upload the same file name without sharing one table.
+    """
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT table_name, dataset_name, document_id
-                FROM structured_datasets
-                WHERE user_id = %s
-                  AND file_name = %s
-                ORDER BY id DESC
+                SELECT
+                    sd.table_name,
+                    sd.dataset_name,
+                    sd.document_id,
+                    COALESCE(sd.status, 'glue_job_pending') AS status,
+                    sd.schema_json,
+                    sd.sample_json,
+                    sd.row_count
+                FROM structured_datasets sd
+                JOIN app_documents ad
+                  ON ad.id = sd.document_id
+                 AND ad.user_id = sd.user_id
+                WHERE sd.user_id = %s
+                  AND sd.file_name = %s
+                ORDER BY sd.id DESC
                 LIMIT 1
             """, (user_id, file_name))
 
             row = cur.fetchone()
 
-    if not row or not row[0]:
-        raise ValueError("Structured table not found. Glue job may not be completed yet.")
+    if not row:
+        raise ValueError(
+            f"No structured dataset found for '{file_name}'. "
+            "Please upload the file first."
+        )
+
+    table_name, dataset_name, document_id, status, schema_json, sample_json, row_count = row
+
+    if status in ("glue_job_pending", "glue_job_started"):
+        messages = {
+            "glue_job_pending": (
+                "File uploaded successfully. AWS Glue is starting. "
+                "Please wait 1–3 minutes and try again."
+            ),
+            "glue_job_started": (
+                "AWS Glue is processing your file. "
+                "Please wait 1–2 minutes and try again."
+            ),
+        }
+        raise ValueError(messages.get(status, f"File status is {status}. Please wait."))
+
+    if not table_name:
+        raise ValueError(
+            f"Structured table is not ready for '{file_name}' "
+            f"(status: {status}). Please wait or re-upload the file."
+        )
 
     return {
-        "table_name": row[0],
-        "dataset_name": row[1],
-        "document_id": row[2],
+        "table_name": table_name,
+        "dataset_name": dataset_name,
+        "document_id": document_id,
+        "status": status,
+        "schema_json": schema_json or {},
+        "sample_json": sample_json or [],
+        "row_count": row_count or 0,
     }
 
 
 def get_table_schema(table_name: str) -> List[Dict]:
+    """
+    Read schema from PostgreSQL and mark internal Glue columns.
+    """
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -92,11 +163,40 @@ def get_table_schema(table_name: str) -> List[Dict]:
     ]
 
 
+def schema_from_json(schema_json: Dict) -> List[Dict]:
+    """
+    Convert Glue stored schema_json into normal schema list.
+    schema_json format is expected as: {"column_name": "data_type"}
+    """
+    result = []
+
+    for col_name, data_type in (schema_json or {}).items():
+        if col_name in SYSTEM_COLUMNS:
+            continue
+
+        result.append({
+            "column_name": col_name,
+            "data_type": data_type,
+            "is_system": False,
+        })
+
+    return result
+
+
 def get_visible_schema(schema: List[Dict]) -> List[Dict]:
-    return [c for c in schema if not c.get("is_system")]
+    return [c for c in schema if not c.get("is_system") and c["column_name"] not in SYSTEM_COLUMNS]
 
 
-def get_column_samples(table_name: str, schema: List[Dict], user_id: int) -> Dict[str, List]:
+def get_column_samples(
+    table_name: str,
+    schema: List[Dict],
+    user_id: int,
+    document_id: int,
+) -> Dict[str, List]:
+    """
+    Fetch distinct sample values for each visible column.
+    Filters by user_id + document_id for strong isolation.
+    """
     samples = {}
 
     with psycopg2.connect(PG_DSN) as conn:
@@ -109,12 +209,12 @@ def get_column_samples(table_name: str, schema: List[Dict], user_id: int) -> Dic
                         SELECT DISTINCT {quote_ident(col_name)}
                         FROM {quote_ident(table_name)}
                         WHERE user_id = %s
+                          AND document_id = %s
                           AND {quote_ident(col_name)} IS NOT NULL
                         LIMIT 5
-                    """, (user_id,))
+                    """, (user_id, document_id))
 
-                    values = [r[0] for r in cur.fetchall()]
-                    samples[col_name] = values
+                    samples[col_name] = [r[0] for r in cur.fetchall()]
 
                 except Exception:
                     conn.rollback()
@@ -123,7 +223,18 @@ def get_column_samples(table_name: str, schema: List[Dict], user_id: int) -> Dic
     return samples
 
 
-def build_schema_context(table_name: str, schema: List[Dict], samples: Dict[str, List]) -> str:
+def normalize_sample_json(sample_json: List[Dict]) -> List[Dict]:
+    cleaned = []
+    for row in sample_json or []:
+        cleaned.append({
+            k: v
+            for k, v in row.items()
+            if k not in SYSTEM_COLUMNS
+        })
+    return cleaned
+
+
+def build_schema_context(schema: List[Dict], samples: Dict[str, List], sample_rows: Optional[List[Dict]] = None) -> str:
     lines = []
 
     for col in get_visible_schema(schema):
@@ -140,6 +251,10 @@ def build_schema_context(table_name: str, schema: List[Dict], samples: Dict[str,
         lines.append(
             f"- {col_name} ({data_type}{numeric_hint}) | samples: {sample_text}"
         )
+
+    if sample_rows:
+        lines.append("\nSample rows:")
+        lines.append(json.dumps(sample_rows[:5], default=str, indent=2))
 
     return "\n".join(lines)
 
@@ -159,7 +274,7 @@ def is_column_list_question(question: str) -> bool:
     return any(p in q for p in patterns)
 
 
-def answer_column_list(schema: List[Dict]) -> Dict:
+def answer_column_list(schema: List[Dict], table_name: str, file_name: str) -> Dict:
     columns = [c["column_name"] for c in get_visible_schema(schema)]
 
     answer = "The dataset columns are:\n" + "\n".join(
@@ -169,11 +284,12 @@ def answer_column_list(schema: List[Dict]) -> Dict:
     return {
         "answer": answer,
         "sql": None,
-        "table_name": None,
+        "table_name": table_name,
         "rows": [],
+        "columns": columns,
         "row_count": len(columns),
         "file_type": "structured",
-        "sources": [],
+        "sources": [file_name],
         "chunks": [],
         "chunks_used": 0,
     }
@@ -183,7 +299,8 @@ def generate_sql(
     question: str,
     table_name: str,
     schema_context: str,
-    user_id: int
+    user_id: int,
+    document_id: int,
 ) -> str:
     system_prompt = """
 You are an expert PostgreSQL SQL generator for a secure structured-data chatbot.
@@ -194,8 +311,10 @@ Generate ONE accurate PostgreSQL SELECT query that answers the user question.
 Hard rules:
 1. Return ONLY SQL. No markdown. No explanation.
 2. Use ONLY the given table.
-3. Use ONLY the provided user-visible columns plus user_id for filtering.
-4. Always include: WHERE user_id = <current_user_id>
+3. Use ONLY the provided user-visible columns plus user_id and document_id for filtering.
+4. Always include BOTH filters:
+   WHERE user_id = <current_user_id>
+   AND document_id = <current_document_id>
 5. Never expose system columns in SELECT: user_id, document_id, source_file_name, processed_at.
 6. Never use INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE, COPY, EXECUTE, CALL, MERGE.
 7. Never query information_schema, pg_catalog, app_users, app_documents, chat_history, structured_datasets, file_upload_events, schema_migrations.
@@ -231,6 +350,9 @@ Table:
 Current user_id:
 {user_id}
 
+Current document_id:
+{document_id}
+
 User-visible schema with samples:
 {schema_context}
 
@@ -258,8 +380,9 @@ def repair_sql(
     table_name: str,
     schema_context: str,
     user_id: int,
+    document_id: int,
     failed_sql: str,
-    error_message: str
+    error_message: str,
 ) -> str:
     system_prompt = """
 You are an expert PostgreSQL SQL repair assistant.
@@ -269,7 +392,7 @@ Fix the SQL query using the error message.
 Rules:
 1. Return ONLY the corrected SQL.
 2. Use only the provided table and columns.
-3. Always filter by user_id.
+3. Always filter by BOTH user_id and document_id.
 4. Never expose system columns in SELECT.
 5. Only SELECT queries are allowed.
 6. If error is due to numeric text, use CAST(REPLACE(column, ',', '') AS NUMERIC).
@@ -283,6 +406,9 @@ Table:
 
 Current user_id:
 {user_id}
+
+Current document_id:
+{document_id}
 
 Schema:
 {schema_context}
@@ -347,6 +473,9 @@ def validate_sql(sql: str, table_name: str) -> str:
     if not re.search(r"\buser_id\b", lowered):
         raise ValueError("SQL must filter by user_id.")
 
+    if not re.search(r"\bdocument_id\b", lowered):
+        raise ValueError("SQL must filter by document_id.")
+
     blocked_patterns = [
         r"\bjoin\b",
         r"\bunion\b",
@@ -389,10 +518,15 @@ def run_sql(sql: str) -> Dict:
             columns = [desc[0] for desc in cur.description]
             rows = cur.fetchall()
 
-    result_rows = [
-        dict(zip(columns, row))
-        for row in rows
-    ]
+    result_rows = []
+
+    for row in rows:
+        item = {}
+
+        for column, value in zip(columns, row):
+            item[column] = make_json_safe(value)
+
+        result_rows.append(item)
 
     return {
         "sql": final_sql,
@@ -402,7 +536,7 @@ def run_sql(sql: str) -> Dict:
     }
 
 
-def summarize_sql_result(question: str, sql: str, result: Dict) -> str:
+def summarize_sql_result(question: str, sql: str, result: Dict, file_name: str) -> str:
     result_json = json.dumps(result["rows"][:20], default=str, indent=2)
 
     system_prompt = """
@@ -417,11 +551,15 @@ Rules:
 6. Be concise and clear.
 7. Do not mention SQL unless needed.
 8. Use exact names and numbers from the result.
+9. For list/detail questions, summarize briefly because the frontend will show the table.
 """
 
     user_prompt = f"""
 User question:
 {question}
+
+Source file:
+{file_name}
 
 SQL used:
 {sql}
@@ -448,27 +586,41 @@ Final answer:
 def answer_structured_question(
     user_id: int,
     file_name: str,
-    question: str
+    question: str,
 ) -> Dict:
     table_info = get_structured_table(user_id, file_name)
     table_name = table_info["table_name"]
+    document_id = table_info["document_id"]
 
-    schema = get_table_schema(table_name)
+    schema = schema_from_json(table_info.get("schema_json") or {})
+
+    if not schema:
+        schema = get_table_schema(table_name)
 
     if is_column_list_question(question):
-        response = answer_column_list(schema)
-        response["table_name"] = table_name
-        response["sources"] = [file_name]
-        return response
+        return answer_column_list(schema, table_name, file_name)
 
-    samples = get_column_samples(table_name, schema, user_id)
-    schema_context = build_schema_context(table_name, schema, samples)
+    sample_rows = normalize_sample_json(table_info.get("sample_json") or [])
+
+    samples = get_column_samples(
+        table_name=table_name,
+        schema=schema,
+        user_id=user_id,
+        document_id=document_id,
+    )
+
+    schema_context = build_schema_context(
+        schema=schema,
+        samples=samples,
+        sample_rows=sample_rows,
+    )
 
     sql = generate_sql(
         question=question,
         table_name=table_name,
         schema_context=schema_context,
         user_id=user_id,
+        document_id=document_id,
     )
 
     try:
@@ -481,6 +633,7 @@ def answer_structured_question(
             table_name=table_name,
             schema_context=schema_context,
             user_id=user_id,
+            document_id=document_id,
             failed_sql=sql,
             error_message=str(first_error),
         )
@@ -490,17 +643,18 @@ def answer_structured_question(
 
     final_sql = result["sql"]
 
-    answer = summarize_sql_result(
+    answer_text = summarize_sql_result(
         question=question,
         sql=final_sql,
         result=result,
+        file_name=file_name,
     )
 
     return {
-        "answer": answer,
+        "answer": answer_text,
         "sql": final_sql,
         "table_name": table_name,
-        "rows": result["rows"][:20],
+        "rows": result["rows"][:30],
         "columns": result["columns"],
         "row_count": result["row_count"],
         "file_type": "structured",
