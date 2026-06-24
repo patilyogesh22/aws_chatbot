@@ -121,42 +121,64 @@ def store_upload_event(
     glue_job_run_id=None,
 ):
     dataset_name = clean_table_name(file_name)
+    status = "glue_job_started" if glue_job_run_id else "uploaded"
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO file_upload_events
-                (
+                UPDATE file_upload_events
+                SET
+                    bucket_name = %s,
+                    file_size = %s,
+                    file_type = %s,
+                    dataset_name = %s,
+                    status = %s,
+                    table_name = %s,
+                    glue_job_run_id = %s
+                WHERE document_id = %s
+            """, (
+                bucket,
+                size,
+                file_type,
+                dataset_name,
+                status,
+                table_name,
+                glue_job_run_id,
+                document_id,
+            ))
+
+            if cur.rowcount == 0:
+                cur.execute("""
+                    INSERT INTO file_upload_events
+                    (
+                        user_id,
+                        file_name,
+                        s3_key,
+                        bucket_name,
+                        file_size,
+                        file_type,
+                        document_id,
+                        dataset_name,
+                        status,
+                        table_name,
+                        glue_job_run_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
                     user_id,
                     file_name,
-                    s3_key,
-                    bucket_name,
-                    file_size,
+                    key,
+                    bucket,
+                    size,
                     file_type,
                     document_id,
                     dataset_name,
                     status,
                     table_name,
-                    glue_job_run_id
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                user_id,
-                file_name,
-                key,
-                bucket,
-                size,
-                file_type,
-                document_id,
-                dataset_name,
-                "glue_job_started" if glue_job_run_id else "uploaded",
-                table_name,
-                glue_job_run_id,
-            ))
+                    glue_job_run_id,
+                ))
 
         conn.commit()
-
-
 def update_structured_dataset(
     user_id,
     document_id,
@@ -236,7 +258,10 @@ def update_structured_dataset(
 # -------------------------
 def start_glue_job(bucket, key, user_id, document_id, file_name):
     dataset_name = clean_table_name(file_name)
-    table_name = "raw_" + dataset_name
+
+    # Unique table per user + document
+    table_name = f"u{int(user_id)}_d{int(document_id)}_{dataset_name}"
+
     s3_input_path = f"s3://{bucket}/{key}"
 
     print("Starting Glue Job...")
