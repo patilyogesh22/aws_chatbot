@@ -25,7 +25,7 @@ import psycopg2
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
+import json
 from app.config import DATA_RAW_DIR, DBT_PROJECT_DIR, PG_DSN
 from aws.s3_ingestion import upload_fileobj_to_s3, delete_s3_object
 from app.file_classifier import classify_file
@@ -345,9 +345,12 @@ def chat(
                                 file_name,
                                 generated_sql,
                                 table_name,
-                                file_type
+                                file_type,
+                                result_rows,
+                                result_columns,
+                                row_count
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
                         """, (
                             current_user["id"],
                             req.question,
@@ -356,6 +359,12 @@ def chat(
                             structured_response.get("sql"),
                             structured_response.get("table_name"),
                             "structured",
+                            json.dumps(structured_response.get("rows", [])),
+                            json.dumps(structured_response.get("columns", [])),
+                            structured_response.get(
+                                "row_count",
+                                len(structured_response.get("rows", []))
+                            ),
                         ))
 
                     conn.commit()
@@ -542,7 +551,10 @@ def get_history(
                         created_at,
                         generated_sql,
                         table_name,
-                        file_type
+                        file_type,
+                        result_rows,
+                        result_columns,
+                        row_count
                     FROM chat_history
                     WHERE user_id = %s
                       AND file_name = %s
@@ -561,7 +573,10 @@ def get_history(
                         created_at,
                         generated_sql,
                         table_name,
-                        file_type
+                        file_type,
+                        result_rows,
+                        result_columns,
+                        row_count
                     FROM chat_history
                     WHERE user_id = %s
                     ORDER BY created_at DESC
@@ -580,14 +595,16 @@ def get_history(
                 "file_name": r[2],
                 "created_at": r[3].isoformat() if r[3] else None,
                 "generated_sql": r[4],
+                "sql": r[4],
                 "table_name": r[5],
                 "file_type": r[6],
+                "rows": r[7] or [],
+                "columns": r[8] or [],
+                "row_count": r[9],
             }
             for r in rows
         ]
     }
-
-
 @app.get("/stats")
 def stats(current_user: dict = Depends(get_current_user)):
     base = collection_stats()

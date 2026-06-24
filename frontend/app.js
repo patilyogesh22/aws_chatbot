@@ -342,18 +342,49 @@ async function loadHistory(fileName) {
   state.messages = [];
   for (const item of history) {
     const ts = fmtDt(item.created_at);
-    if (item.question) state.messages.push({ role:'user', content:item.question, ts });
-    if (item.answer)   state.messages.push({
-      role:'assistant', content:item.answer, ts,
-      sources:    item.file_name ? [item.file_name] : [],
-      chunks:     [],
-      model:      item.model      || '',
-      sql: item.sql || item.generated_sql || null,
-      table_name: item.table_name || null,
-      row_count:  item.row_count  ?? null,
-      file_type:  item.file_type  || null,
-    });
+
+    if (item.question) {
+      state.messages.push({
+        role: 'user',
+        content: item.question,
+        ts
+      });
+    }
+
+    if (item.answer) {
+      const rows = item.rows || [];
+      const columns = item.columns || [];
+
+      const hasStructuredTable =
+        Array.isArray(rows) &&
+        rows.length > 0 &&
+        Array.isArray(columns) &&
+        columns.length > 0;
+
+      const cleanAnswer = hasStructuredTable
+        ? `Found ${rows.length} result${rows.length > 1 ? 's' : ''}. See the table below.`
+        : item.answer;
+
+      state.messages.push({
+        role: 'assistant',
+        content: cleanAnswer,
+        ts,
+
+        sources: item.file_name ? [item.file_name] : [],
+        chunks: [],
+        model: item.model || '',
+
+        sql: item.sql || item.generated_sql || null,
+        table_name: item.table_name || null,
+        row_count: item.row_count ?? rows.length ?? null,
+        file_type: item.file_type || null,
+
+        rows,
+        columns,
+      });
+    }
   }
+
   renderMessages();
 }
 
@@ -647,9 +678,22 @@ async function sendMessage() {
   const tsAns = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
 
   if (status === 200) {
-    const answer = data.answer || data.response || data.result || data.message || data.text || 'No answer returned.';
+    let answer = data.answer || data.response || data.result || data.message || data.text || 'No answer returned.';
+
+    const hasStructuredTable =
+      Array.isArray(data.rows) &&
+      data.rows.length > 0 &&
+      Array.isArray(data.columns) &&
+      data.columns.length > 0;
+
+    if (hasStructuredTable) {
+      answer = `Found ${data.rows.length} result${data.rows.length > 1 ? 's' : ''}. See the table below.`;
+    }
+
     addMessage({
-      role:'assistant', content:answer, ts:tsAns,
+      role:'assistant',
+      content: answer,
+      ts: tsAns,
       model:      data.model || data.model_used || '',
       sources:    data.sources    || [],
       chunks:     data.chunks     || [],
