@@ -11,7 +11,7 @@ Login/Register
     │       → NL-to-SQL structured chat
     └── unstructured: PDF / DOCX / TXT / MD / PPTX
             → S3 → Text extraction → raw_chunks with user_id
-            → dbt → ChromaDB embeddings with user_id
+            → dbt → Pgvector embeddings with user_id
             → user-specific RAG chat
 """
 
@@ -40,12 +40,14 @@ from app.ingestion import (
     ingest_file_from_s3_key,
     delete_file_chunks,
     init_postgres,
+
 )
 
 from app.embeddings import (
     embed_from_postgres,
     delete_file_embeddings,
     collection_stats,
+    init_pgvector,
 )
 
 from app.retriever import retrieve, build_context
@@ -78,6 +80,7 @@ os.makedirs(DATA_RAW_DIR, exist_ok=True)
 def startup():
     init_auth_tables()
     init_postgres()
+    init_pgvector()
 
 
 @app.get("/")
@@ -93,7 +96,7 @@ def health():
     status = {
         "api": "ok",
         "postgres": "unknown",
-        "chromadb": "unknown"
+        "pgvector": "unknown"
     }
 
     try:
@@ -101,18 +104,20 @@ def health():
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
         status["postgres"] = "ok"
+
     except Exception as e:
         status["postgres"] = f"error: {e}"
 
     try:
-        s = collection_stats()
-        status["chromadb"] = "ok"
-        status["total_vectors"] = s.get("total_vectors", 0)
+        stats = collection_stats()
+
+        status["pgvector"] = "ok"
+        status["total_vectors"] = stats.get("total_vectors", 0)
+
     except Exception as e:
-        status["chromadb"] = f"error: {e}"
+        status["pgvector"] = f"error: {e}"
 
     return status
-
 
 @app.post("/upload")
 async def upload_file(
@@ -607,7 +612,7 @@ def get_history(
     }
 @app.get("/stats")
 def stats(current_user: dict = Depends(get_current_user)):
-    base = collection_stats()
+    base = collection_stats(user_id=current_user["id"])
 
     try:
         with psycopg2.connect(PG_DSN) as conn:
@@ -616,9 +621,7 @@ def stats(current_user: dict = Depends(get_current_user)):
                     SELECT COUNT(*)
                     FROM app_documents
                     WHERE user_id = %s
-                """, (
-                    current_user["id"],
-                ))
+                """, (current_user["id"],))
                 base["pg_files"] = cur.fetchone()[0]
 
                 cur.execute("""
@@ -626,9 +629,7 @@ def stats(current_user: dict = Depends(get_current_user)):
                     FROM app_documents
                     WHERE user_id = %s
                       AND file_type = 'structured'
-                """, (
-                    current_user["id"],
-                ))
+                """, (current_user["id"],))
                 base["structured_files"] = cur.fetchone()[0]
 
                 cur.execute("""
@@ -636,18 +637,14 @@ def stats(current_user: dict = Depends(get_current_user)):
                     FROM app_documents
                     WHERE user_id = %s
                       AND file_type = 'unstructured'
-                """, (
-                    current_user["id"],
-                ))
+                """, (current_user["id"],))
                 base["unstructured_files"] = cur.fetchone()[0]
 
                 cur.execute("""
                     SELECT COUNT(*)
                     FROM raw_chunks
                     WHERE user_id = %s
-                """, (
-                    current_user["id"],
-                ))
+                """, (current_user["id"],))
                 base["pg_raw_chunks"] = cur.fetchone()[0]
 
                 try:
@@ -655,18 +652,16 @@ def stats(current_user: dict = Depends(get_current_user)):
                         SELECT COUNT(*)
                         FROM mart_processed_chunks
                         WHERE user_id = %s
-                    """, (
-                        current_user["id"],
-                    ))
+                    """, (current_user["id"],))
                     base["pg_mart_chunks"] = cur.fetchone()[0]
                 except Exception:
                     conn.rollback()
+                    base["pg_mart_chunks"] = 0
 
     except Exception as e:
         base["error"] = str(e)
 
     return base
-
 
 @app.post("/dbt/run")
 def run_dbt(current_user: dict = Depends(get_current_user)):

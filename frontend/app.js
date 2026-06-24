@@ -4,7 +4,7 @@
    Endpoints used:
      POST /auth/login-json  → { access_token, user }
      POST /auth/register    → { access_token, user }
-     GET  /health           → { postgres, chromadb }
+     GET  /health           → { postgres, Pgvector }
      GET  /stats            → { pg_files, pg_raw_chunks, total_vectors }
      GET  /files            → { files: [{name, file_type, size, uploaded_at, chunks}] }
      POST /upload           → multipart/form-data

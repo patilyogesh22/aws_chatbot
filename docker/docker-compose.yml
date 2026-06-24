@@ -15,9 +15,9 @@ services:
 
     env_file:
       - ../.env
+
     volumes:
       - ../data:/app/data
-      - ../vector_store:/app/vector_store
       - ../dbt_chatbot:/app/dbt_chatbot
       - ~/.dbt:/root/.dbt
 

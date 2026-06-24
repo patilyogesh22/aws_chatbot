@@ -18,9 +18,7 @@ COPY requirements-core.txt .
 COPY requirements-ml.txt .
 
 RUN pip install --no-cache-dir --upgrade pip
-
 RUN pip install --no-cache-dir -r requirements-core.txt
-
 RUN pip install --no-cache-dir -r requirements-ml.txt
 
 COPY app ./app
@@ -31,7 +29,6 @@ COPY migrations ./migrations
 RUN mkdir -p \
     data/raw \
     data/processed \
-    vector_store \
     logs
 
 EXPOSE 8000

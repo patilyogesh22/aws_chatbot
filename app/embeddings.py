@@ -1,27 +1,24 @@
 """
 embeddings.py
 Reads processed chunks from PostgreSQL, generates embeddings,
-and stores them in ChromaDB with user-level isolation.
+and stores them in PostgreSQL pgvector with user-level isolation.
+
+This replaces ChromaDB so local and EC2 can use the same RDS vector table.
 """
 
-import os
+import json
 from typing import List, Dict, Optional
 
 import psycopg2
-import chromadb
-from chromadb.config import Settings
+from pgvector.psycopg2 import register_vector
 from sentence_transformers import SentenceTransformer
 
 from app.config import (
     PG_DSN,
-    VECTOR_STORE_DIR,
-    CHROMA_COLLECTION,
     EMBEDDING_MODEL,
 )
 
 _model: SentenceTransformer = None
-_chroma_client = None
-_collection = None
 
 
 def _get_model() -> SentenceTransformer:
@@ -34,72 +31,57 @@ def _get_model() -> SentenceTransformer:
     return _model
 
 
-def _get_collection():
-    global _chroma_client, _collection
-
-    if _collection is None:
-        os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
-
-        _chroma_client = chromadb.PersistentClient(
-            path=VECTOR_STORE_DIR,
-            settings=Settings(anonymized_telemetry=False),
-        )
-
-        _collection = _chroma_client.get_or_create_collection(
-            name=CHROMA_COLLECTION,
-            metadata={"hnsw:space": "cosine"},
-        )
-
-    return _collection
-
-
-def embed_and_store(chunks: List[Dict]) -> int:
+def init_pgvector():
     """
-    Takes chunk dicts and stores embeddings in ChromaDB.
-
-    Every vector stores:
-    - user_id
-    - document_id
-    - file_name
-    - file_hash
-    - chunk_index
-
-    This is required so retrieval can filter by logged-in user.
+    Create pgvector extension and embeddings table.
     """
 
-    if not chunks:
-        return 0
+    conn = psycopg2.connect(PG_DSN)
 
-    model = _get_model()
-    collection = _get_collection()
+    try:
+        register_vector(conn)
 
-    texts = [c["chunk_text"] for c in chunks]
-    ids = [c["chunk_id"] for c in chunks]
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
-    metadatas = [
-        {
-            "user_id": str(c.get("user_id", "")),
-            "document_id": str(c.get("document_id", "")),
-            "file_name": c.get("file_name", ""),
-            "file_hash": c.get("file_hash", ""),
-            "chunk_index": str(c.get("chunk_index", 0)),
-            "word_count": str(c.get("word_count", 0)),
-        }
-        for c in chunks
-    ]
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS document_embeddings (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    document_id INTEGER,
+                    file_name TEXT NOT NULL,
+                    file_hash TEXT,
+                    chunk_id TEXT NOT NULL,
+                    chunk_index INTEGER,
+                    word_count INTEGER,
+                    chunk_text TEXT NOT NULL,
+                    embedding vector(384),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
 
-    print(f"[embeddings] Generating embeddings for {len(texts)} chunks...")
-    embeddings = model.encode(texts, show_progress_bar=True).tolist()
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_document_embeddings_chunk
+                ON document_embeddings(user_id, file_name, chunk_id);
+            """)
 
-    collection.upsert(
-        ids=ids,
-        embeddings=embeddings,
-        documents=texts,
-        metadatas=metadatas,
-    )
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_document_embeddings_user_file
+                ON document_embeddings(user_id, file_name);
+            """)
 
-    print(f"[embeddings] Stored {len(texts)} vectors in ChromaDB")
-    return len(texts)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_document_embeddings_vector
+                ON document_embeddings
+                USING ivfflat (embedding vector_cosine_ops)
+                WITH (lists = 100);
+            """)
+
+        conn.commit()
+        print("[embeddings] pgvector initialized")
+
+    finally:
+        conn.close()
 
 
 def _fetch_chunks_from_pg(
@@ -111,9 +93,6 @@ def _fetch_chunks_from_pg(
 
     First tries mart_processed_chunks.
     If dbt mart is not available, falls back to raw_chunks.
-
-    Important:
-    Both tables must include user_id.
     """
 
     conn = psycopg2.connect(PG_DSN)
@@ -186,6 +165,78 @@ def _fetch_chunks_from_pg(
         conn.close()
 
 
+def embed_and_store(chunks: List[Dict]) -> int:
+    """
+    Takes chunk dicts and stores embeddings in PostgreSQL pgvector.
+    """
+
+    if not chunks:
+        return 0
+
+    init_pgvector()
+
+    model = _get_model()
+
+    texts = [c["chunk_text"] for c in chunks]
+
+    print(f"[embeddings] Generating embeddings for {len(texts)} chunks...")
+    embeddings = model.encode(texts, show_progress_bar=True).tolist()
+
+    conn = psycopg2.connect(PG_DSN)
+
+    try:
+        register_vector(conn)
+
+        inserted = 0
+
+        with conn.cursor() as cur:
+            for c, emb in zip(chunks, embeddings):
+                cur.execute("""
+                    INSERT INTO document_embeddings
+                    (
+                        user_id,
+                        document_id,
+                        file_name,
+                        file_hash,
+                        chunk_id,
+                        chunk_index,
+                        word_count,
+                        chunk_text,
+                        embedding
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id, file_name, chunk_id)
+                    DO UPDATE SET
+                        document_id = EXCLUDED.document_id,
+                        file_hash = EXCLUDED.file_hash,
+                        chunk_index = EXCLUDED.chunk_index,
+                        word_count = EXCLUDED.word_count,
+                        chunk_text = EXCLUDED.chunk_text,
+                        embedding = EXCLUDED.embedding,
+                        created_at = CURRENT_TIMESTAMP
+                """, (
+                    int(c.get("user_id")),
+                    c.get("document_id"),
+                    c.get("file_name"),
+                    c.get("file_hash"),
+                    c.get("chunk_id"),
+                    c.get("chunk_index"),
+                    c.get("word_count"),
+                    c.get("chunk_text"),
+                    emb,
+                ))
+
+                inserted += 1
+
+        conn.commit()
+
+        print(f"[embeddings] Stored {inserted} vectors in PostgreSQL pgvector")
+        return inserted
+
+    finally:
+        conn.close()
+
+
 def embed_from_postgres(
     user_id: int,
     file_name: Optional[str] = None,
@@ -207,34 +258,58 @@ def delete_file_embeddings(user_id: int, file_name: str):
     Delete embeddings only for logged-in user's selected file.
     """
 
-    collection = _get_collection()
+    init_pgvector()
 
-    results = collection.get(
-        where={
-            "$and": [
-                {"user_id": str(user_id)},
-                {"file_name": file_name},
-            ]
-        }
-    )
+    conn = psycopg2.connect(PG_DSN)
 
-    ids = results.get("ids", [])
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM document_embeddings
+                WHERE user_id = %s
+                  AND file_name = %s
+            """, (
+                user_id,
+                file_name,
+            ))
 
-    if ids:
-        collection.delete(ids=ids)
+            deleted = cur.rowcount
+
+        conn.commit()
+
         print(
-            f"[embeddings] Deleted {len(ids)} vectors "
+            f"[embeddings] Deleted {deleted} vectors "
             f"for user={user_id}, file='{file_name}'"
         )
 
+    finally:
+        conn.close()
 
-def collection_stats() -> Dict:
-    """
-    Global Chroma stats.
-    """
 
-    collection = _get_collection()
+def collection_stats(user_id: int = None) -> Dict:
+    init_pgvector()
 
-    return {
-        "total_vectors": collection.count()
-    }
+    conn = psycopg2.connect(PG_DSN)
+
+    try:
+        with conn.cursor() as cur:
+            if user_id:
+                cur.execute("""
+                    SELECT COUNT(*)
+                    FROM document_embeddings
+                    WHERE user_id = %s
+                """, (user_id,))
+            else:
+                cur.execute("""
+                    SELECT COUNT(*)
+                    FROM document_embeddings
+                """)
+
+            total_vectors = cur.fetchone()[0]
+
+        return {
+            "total_vectors": total_vectors
+        }
+
+    finally:
+        conn.close()

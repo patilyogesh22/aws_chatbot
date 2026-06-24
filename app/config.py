@@ -15,13 +15,15 @@ JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))
 # ── Embedding model ───────────────────────────────────────────────────────────
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
+# all-MiniLM-L6-v2 embedding dimension
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_RAW_DIR = os.path.join(BASE_DIR, "data", "raw")
-VECTOR_STORE_DIR = os.path.join(BASE_DIR, "vector_store")
 DBT_PROJECT_DIR = os.path.join(BASE_DIR, "dbt_chatbot")
 
-# ── PostgreSQL ────────────────────────────────────────────────────────────────
+# ── PostgreSQL / RDS ──────────────────────────────────────────────────────────
 PG_HOST = os.getenv("PG_HOST")
 PG_PORT = int(os.getenv("PG_PORT", "5432"))
 PG_DB = os.getenv("PG_DB")
@@ -48,9 +50,6 @@ PG_DSN = (
     f"user={PG_USER} "
     f"password={PG_PASSWORD}"
 )
-
-# ── ChromaDB ──────────────────────────────────────────────────────────────────
-CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "rag_documents")
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
