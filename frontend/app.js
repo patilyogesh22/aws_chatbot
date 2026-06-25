@@ -12,6 +12,7 @@
      GET  /history?file_name=
      POST /chat             → { question, file_name, top_k, chat_history }
      POST /dbt/run          → { dbt_status }
+     GET  /structured/status/{file_name} → { status, ready, message, row_count }
 ═══════════════════════════════════════════════════════════════ */
 
 const API_URL = window.__API_URL__ || '/api';
@@ -23,15 +24,17 @@ const API_URL = window.__API_URL__ || '/api';
    STATE
 ───────────────────────────────────────────────────────────── */
 let state = {
-  token:        null,
-  user:         null,
-  messages:     [],
-  selectedFile: null,
-  showChunks:   false,
-  topK:         5,
-  theme:        'dark',
-  pendingFile:  null,
-  isTyping:     false,
+  token:           null,
+  user:            null,
+  messages:        [],
+  selectedFile:    null,
+  showChunks:      false,
+  topK:            5,
+  theme:           'dark',
+  pendingFile:     null,
+  isTyping:        false,
+  fileStatuses:    {},   // { fileName: { status, ready, message, row_count } }
+  statusPollers:   {},   // { fileName: intervalId }
 };
 
 /* ─────────────────────────────────────────────────────────────
@@ -77,6 +80,109 @@ function resetActivityTimer() {
 ['click','keydown','mousemove','scroll','touchstart'].forEach(ev =>
   document.addEventListener(ev, resetActivityTimer, { passive: true })
 );
+
+/* ─────────────────────────────────────────────────────────────
+   FILE STATUS POLLING
+   Uses GET /structured/status/{file_name}
+   Polls every 8s for structured files until status = 'ready'
+───────────────────────────────────────────────────────────── */
+
+const STATUS_ICONS = {
+  glue_job_pending:  { icon: '⏳', label: 'Pending',    cls: 'status-pending'  },
+  glue_job_started:  { icon: '⚙️', label: 'Processing', cls: 'status-running'  },
+  ready:             { icon: '✅', label: 'Ready',       cls: 'status-ready'    },
+  error:             { icon: '❌', label: 'Failed',      cls: 'status-error'    },
+  not_found:         { icon: '❓', label: 'Unknown',     cls: 'status-unknown'  },
+};
+
+async function fetchFileStatus(fileName) {
+  const { data } = await apiGet(`/structured/status/${encodeURIComponent(fileName)}`);
+  return data;
+}
+
+function renderFileStatusBadge(fileName) {
+  const info = state.fileStatuses[fileName];
+  if (!info) return '';
+  const s = STATUS_ICONS[info.status] || STATUS_ICONS['not_found'];
+  const rowInfo = info.row_count ? ` · ${info.row_count.toLocaleString()} rows` : '';
+  return `<span class="file-status-badge ${s.cls}" title="${escapeHtml(info.message || '')}">${s.icon} ${s.label}${rowInfo}</span>`;
+}
+
+function startStatusPolling(fileName) {
+  // Only poll structured files not yet ready
+  if (state.statusPollers[fileName]) return; // already polling
+
+  async function poll() {
+    const data = await fetchFileStatus(fileName);
+    if (!data || !data.status) return;
+
+    state.fileStatuses[fileName] = data;
+
+    // Re-render file list to show updated status badge
+    const card = document.querySelector(`.file-card[data-name="${CSS.escape(fileName)}"]`);
+    if (card) {
+      const badge = card.querySelector('.file-status-badge');
+      const newBadgeHtml = renderFileStatusBadge(fileName);
+      if (badge) {
+        badge.outerHTML = newBadgeHtml;
+      } else {
+        // Insert after the fc-row
+        const fcRow = card.querySelector('.fc-row');
+        if (fcRow && newBadgeHtml) {
+          const tmp = document.createElement('div');
+          tmp.innerHTML = newBadgeHtml;
+          fcRow.after(tmp.firstChild);
+        }
+      }
+    }
+
+    // Show toast when ready
+    if (data.status === 'ready' || data.status === 'error') {
+      stopStatusPolling(fileName);
+      if (data.status === 'ready') {
+        toast(`✅ ${fileName} is ready! You can now ask questions.`, 'success');
+        // If this file is currently selected, update filter banner
+        if (state.selectedFile === fileName) {
+          updateFilterBanner();
+        }
+        // Reload file list to refresh chunk count
+        loadFiles();
+      } else {
+        toast(`❌ ${fileName} processing failed. Try re-uploading.`, 'error');
+      }
+    }
+  }
+
+  poll(); // immediate first check
+  state.statusPollers[fileName] = setInterval(poll, 8000); // every 8s
+}
+
+function stopStatusPolling(fileName) {
+  if (state.statusPollers[fileName]) {
+    clearInterval(state.statusPollers[fileName]);
+    delete state.statusPollers[fileName];
+  }
+}
+
+function stopAllPolling() {
+  Object.keys(state.statusPollers).forEach(stopStatusPolling);
+}
+
+// Start polling for all pending structured files on load
+async function initStatusPolling(files) {
+  for (const f of files) {
+    if (f.file_type !== 'structured') continue;
+
+    const data = await fetchFileStatus(f.name);
+    if (!data) continue;
+
+    state.fileStatuses[f.name] = data;
+
+    if (!data.ready && data.status !== 'error' && data.status !== 'not_found') {
+      startStatusPolling(f.name);
+    }
+  }
+}
 
 /* ─────────────────────────────────────────────────────────────
    API HELPERS
@@ -205,9 +311,11 @@ function closeProfile() {
 function forceLogout(reason) {
   clearSession();
   clearTimeout(activityTimer);
+  stopAllPolling();
   state = { token:null, user:null, messages:[], selectedFile:null,
             pendingFile:null, isTyping:false, showChunks: state.showChunks,
-            topK: state.topK, theme: state.theme };
+            topK: state.topK, theme: state.theme,
+            fileStatuses: {}, statusPollers: {} };
   document.getElementById('appShell').classList.add('hidden');
   document.getElementById('landing').classList.remove('hidden');
   clearChat();
@@ -264,6 +372,9 @@ async function loadFiles() {
   if (files.length && typeof files[0] === 'string')
     files = files.map(f => ({ name:f, file_type:'unknown', chunks:0, size:0, uploaded_at:null }));
   renderFiles(files);
+  // Start polling for structured files not yet ready
+  await initStatusPolling(files);
+  renderFiles(files); // re-render with status badges
 }
 
 function renderFiles(files) {
@@ -287,14 +398,27 @@ function renderFiles(files) {
                      f.file_type === 'unstructured' ? 'badge-unstructured' : 'badge-unknown';
     const badgeTxt = f.file_type === 'structured'   ? '📊 structured' :
                      f.file_type === 'unstructured' ? '📄 unstructured' : '❔ unknown';
+
+    // Status badge for structured files
+    // Status badge — structured files poll Glue; unstructured show Ready immediately
+    const statusBadge = f.file_type === 'structured'
+      ? renderFileStatusBadge(f.name)
+      : `<span class="file-status-badge status-ready" title="Embedded and ready to chat">✅ Ready</span>`;
+
+    // If structured and not ready, grey out the card
+    const statusInfo = state.fileStatuses[f.name];
+    const notReady = f.file_type === 'structured' && statusInfo && !statusInfo.ready;
+    const cardCls = `file-card ${active} ${notReady ? 'file-not-ready' : ''}`;
+
     return `
-      <div class="file-card ${active}" data-name="${escapeHtml(f.name)}">
+      <div class="${cardCls}" data-name="${escapeHtml(f.name)}" data-type="${f.file_type}">
         <div class="fc-row">
           <span class="fc-icon">${extIcon(f.name)}</span>
           <span class="fc-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
           <span class="fc-badge ${badgeCls}">${badgeTxt}</span>
           <button class="fc-delete" data-del="${escapeHtml(f.name)}" title="Remove file">🗑</button>
         </div>
+        ${statusBadge}
         <div class="fc-meta">
           <span>${f.chunks ?? 0} chunks</span>
           <span>${fmtSize(f.size)}</span>
@@ -307,8 +431,19 @@ function renderFiles(files) {
   container.querySelectorAll('.file-card').forEach(card => {
     card.addEventListener('click', (e) => {
       if (e.target.closest('.fc-delete')) return; // handled separately
-      const name = card.dataset.name;
-      const deselect = state.selectedFile === name;
+      const name      = card.dataset.name;
+      const fileType  = card.dataset.type;
+      const deselect  = state.selectedFile === name;
+
+      // Block click on structured files not yet ready
+      if (!deselect && fileType === 'structured') {
+        const statusInfo = state.fileStatuses[name];
+        if (statusInfo && !statusInfo.ready) {
+          toast(`⏳ ${name} is still processing. ${statusInfo.message || 'Please wait.'}`, 'warning');
+          return;
+        }
+      }
+
       state.selectedFile = deselect ? null : name;
       updateFilterBanner();
       renderFiles(files);
@@ -639,6 +774,15 @@ async function sendMessage() {
   if (!q) return;
   if (state.isTyping) { toast('Please wait for the current response…', 'warning'); return; }
 
+  // Block chat if selected structured file is not ready yet
+  if (state.selectedFile) {
+    const statusInfo = state.fileStatuses[state.selectedFile];
+    if (statusInfo && !statusInfo.ready && statusInfo.status !== 'not_found') {
+      toast(`⏳ ${state.selectedFile} is still processing. ${statusInfo.message || 'Please wait.'}`, 'warning');
+      return;
+    }
+  }
+
   const ts = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
   addMessage({ role:'user', content:q, ts });
   chatInput.value = '';
@@ -750,13 +894,33 @@ ingestBtn.addEventListener('click', async () => {
   showProgress(false);
   ingestBtn.disabled = false;
   if (status === 200) {
-    const chunks = data.chunks ?? 0;
-    toast(`✅ ${state.pendingFile.name} ingested · ${chunks} chunks`, 'success');
+    const chunks    = data.chunks ?? 0;
+    const fileName  = data.file || state.pendingFile.name;
+    const isStruct  = data.file_type === 'structured';
+
+    if (isStruct) {
+      toast(`📤 ${fileName} uploaded! AWS Glue is processing (1–3 min)…`, 'info');
+      // Set initial pending status immediately
+      state.fileStatuses[fileName] = {
+        status: 'glue_job_pending',
+        ready: false,
+        message: 'File uploaded. Waiting for AWS Glue to start…',
+        row_count: null,
+      };
+    } else {
+      toast(`✅ ${fileName} ingested · ${chunks} chunks`, 'success');
+    }
+
     state.pendingFile = null;
     uploadPending.classList.add('hidden');
     uploadInput.value = '';
     await loadFiles();
     await loadHealthStats();
+
+    // Start polling immediately for structured files
+    if (isStruct) {
+      startStatusPolling(fileName);
+    }
   } else if (status === 400 && (data.detail||'').toLowerCase().includes('duplicate')) {
     toast('File already uploaded — skipped.', 'warning');
   } else {

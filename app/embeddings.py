@@ -17,7 +17,7 @@ from app.config import (
     PG_DSN,
     EMBEDDING_MODEL,
 )
-
+_pgvector_initialized = False
 _model: SentenceTransformer = None
 
 
@@ -30,11 +30,15 @@ def _get_model() -> SentenceTransformer:
 
     return _model
 
-
 def init_pgvector():
     """
     Create pgvector extension and embeddings table.
+    Runs only once per backend process.
     """
+    global _pgvector_initialized
+
+    if _pgvector_initialized:
+        return
 
     conn = psycopg2.connect(PG_DSN)
 
@@ -78,12 +82,12 @@ def init_pgvector():
             """)
 
         conn.commit()
+
+        _pgvector_initialized = True
         print("[embeddings] pgvector initialized")
 
     finally:
         conn.close()
-
-
 def _fetch_chunks_from_pg(
     user_id: int,
     file_name: Optional[str] = None,

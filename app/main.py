@@ -91,7 +91,6 @@ def startup():
     init_pgvector()
     _init_extra_tables()
 
-
 def _init_extra_tables():
     """
     Safe startup migration for structured metadata and chat history columns.
@@ -644,7 +643,35 @@ def delete_file(
 
     document_id, file_type, s3_key = doc
     deleted = {}
+    structured_table_rows = []
 
+    if file_type == "structured":
+        with psycopg2.connect(PG_DSN) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT table_name
+                    FROM structured_datasets
+                    WHERE user_id = %s
+                    AND document_id = %s
+                    AND table_name IS NOT NULL
+
+                    UNION
+
+                    SELECT table_name
+                    FROM file_upload_events
+                    WHERE user_id = %s
+                    AND document_id = %s
+                    AND table_name IS NOT NULL
+                """, (
+                    user_id,
+                    document_id,
+                    user_id,
+                    document_id,
+                ))
+
+                structured_table_rows = cur.fetchall()
+
+        print("[delete] tables collected before delete:", structured_table_rows)
     if s3_key:
         try:
             delete_s3_object(s3_key)
@@ -699,28 +726,25 @@ def delete_file(
                 deleted["document_embeddings_rows"] = f"skipped/error: {e}"
 
             dropped_tables = []
-            if file_type == "structured":
-                cur.execute("""
-                    SELECT table_name
-                    FROM structured_datasets
-                    WHERE user_id = %s
-                      AND document_id = %s
-                      AND table_name IS NOT NULL
-                """, (user_id, document_id))
 
-                for (table_name,) in cur.fetchall():
-                    try:
-                        if _safe_drop_table(cur, table_name):
-                            dropped_tables.append(table_name)
-                    except Exception as e:
-                        print(f"[delete] DROP TABLE failed for {table_name}: {e}")
-                        conn.rollback()
+            if file_type == "structured":
+                print("[delete] structured file detected")
+                print("[delete] user_id:", user_id)
+                print("[delete] document_id:", document_id)
+
+                table_rows = structured_table_rows
+                print("[delete] table_rows:", table_rows)
+
+                for (table_name,) in table_rows:
+                    if _safe_drop_table(cur, table_name):
+                        dropped_tables.append(table_name)
 
                 cur.execute("""
                     DELETE FROM structured_datasets
                     WHERE user_id = %s
-                      AND document_id = %s
+                    AND document_id = %s
                 """, (user_id, document_id))
+
                 deleted["structured_datasets"] = cur.rowcount
                 deleted["rds_tables_dropped"] = dropped_tables
 

@@ -2625,3 +2625,107 @@ textarea::placeholder {
 .filter-banner {
   flex-shrink: 0 !important;
 }
+/* ═══════════════════════════════════════════════════════════════
+   FILE STATUS BADGES  (structured file Glue processing)
+═══════════════════════════════════════════════════════════════ */
+
+.file-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  margin: 0.25rem 0 0.15rem;
+  width: fit-content;
+  letter-spacing: 0.02em;
+  transition: all var(--transition);
+}
+
+.status-pending {
+  background: rgba(245,158,11,0.1);
+  border: 1px solid rgba(245,158,11,0.3);
+  color: #f59e0b;
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+.status-running {
+  background: rgba(34,211,238,0.08);
+  border: 1px solid rgba(34,211,238,0.25);
+  color: var(--accent2);
+  animation: statusPulse 1.5s ease-in-out infinite;
+}
+
+.status-ready {
+  background: rgba(16,185,129,0.1);
+  border: 1px solid rgba(16,185,129,0.3);
+  color: var(--success);
+}
+
+.status-error {
+  background: rgba(244,63,94,0.08);
+  border: 1px solid rgba(244,63,94,0.25);
+  color: var(--error);
+}
+
+.status-unknown {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.65; }
+}
+
+/* File card not ready — slightly dimmed, cursor not-allowed */
+.file-card.file-not-ready {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+.file-card.file-not-ready:hover {
+  transform: none;
+  border-color: var(--border);
+  background: var(--bg-card);
+  box-shadow: none;
+}
+.file-card.file-not-ready .fc-name {
+  color: var(--text-muted);
+}
+
+/* Light mode overrides */
+[data-theme="light"] .status-pending {
+  background: rgba(245,158,11,0.08);
+  border-color: rgba(245,158,11,0.25);
+}
+[data-theme="light"] .status-running {
+  background: rgba(34,211,238,0.06);
+  border-color: rgba(34,211,238,0.2);
+}
+[data-theme="light"] .status-ready {
+  background: rgba(16,185,129,0.07);
+  border-color: rgba(16,185,129,0.22);
+}
+[data-theme="light"] .status-error {
+  background: rgba(244,63,94,0.06);
+  border-color: rgba(244,63,94,0.2);
+}
+
+/* ── Processing progress bar on file card ─────────────────── */
+.file-card.file-not-ready::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  border-radius: 0 0 0 var(--radius-sm);
+  animation: processingBar 2.5s ease-in-out infinite;
+}
+@keyframes processingBar {
+  0%   { width: 0%; opacity: 1; }
+  70%  { width: 85%; opacity: 1; }
+  90%  { width: 95%; opacity: 0.6; }
+  100% { width: 0%;  opacity: 0; }
+}
