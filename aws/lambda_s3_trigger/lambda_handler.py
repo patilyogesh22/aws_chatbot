@@ -255,7 +255,8 @@ def update_structured_dataset(
 
 # -------------------------
 # GLUE JOB
-# -------------------------def start_glue_job(bucket, key, user_id, document_id, file_name):
+# -------------------------
+def start_glue_job(bucket, key, user_id, document_id, file_name):
     dataset_name = clean_table_name(file_name)
 
     # Unique table per user + document
