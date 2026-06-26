@@ -28,11 +28,4 @@ sources:
             data_tests:
               - not_null
 
-      # -----------------------------
-      # STRUCTURED PIPELINE
-      # -----------------------------
-      - name: raw_sales_data
-
-      - name: raw_employee_data
-
-      - name: raw_increment_policy
+ 

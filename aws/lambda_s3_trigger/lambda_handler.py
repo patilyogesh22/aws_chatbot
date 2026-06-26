@@ -287,22 +287,42 @@ def start_glue_job(bucket, key, user_id, document_id, file_name):
 # -------------------------
 # LAMBDA HANDLER
 # -------------------------
+
 def lambda_handler(event, context):
-    print("EVENT RECEIVED")
+    """
+    New trigger:
+    SQS → Lambda → Glue
+
+    FastAPI sends this message to SQS:
+    {
+        "user_id": 1,
+        "document_id": 75,
+        "file_name": "employee.csv",
+        "file_type": "structured",
+        "bucket": "your-bucket",
+        "s3_key": "uploads/user_1/structured/employee.csv",
+        "s3_path": "s3://your-bucket/uploads/user_1/structured/employee.csv",
+        "file_size": 12345
+    }
+    """
+
+    print("SQS EVENT RECEIVED")
     print(json.dumps(event))
 
     results = []
 
-    try:
-        for record in event["Records"]:
-            bucket = record["s3"]["bucket"]["name"]
-            key = record["s3"]["object"]["key"]
-            size = record["s3"]["object"].get("size", 0)
+    for record in event.get("Records", []):
+        try:
+            body = json.loads(record["body"])
 
-            file_name = key.split("/")[-1]
-            user_id = extract_user_id(key)
-            file_type = classify_file(file_name)
-            document_id = get_document_id_with_retry(user_id, key)
+            bucket = body["bucket"]
+            key = body["s3_key"]
+            size = body.get("file_size", 0)
+
+            file_name = body["file_name"]
+            user_id = int(body["user_id"])
+            document_id = int(body["document_id"])
+            file_type = body["file_type"]
 
             print("File:", file_name)
             print("User ID:", user_id)
@@ -312,8 +332,9 @@ def lambda_handler(event, context):
 
             if not document_id:
                 raise Exception(
-                    f"Document not found in app_documents for user_id={user_id}, s3_key={key}"
+                    f"Missing document_id in SQS message for user_id={user_id}, s3_key={key}"
                 )
+
             if file_type == "unknown":
                 print("Unsupported file type. Skipping:", file_name)
                 results.append({
@@ -337,9 +358,8 @@ def lambda_handler(event, context):
                 results.append({
                     "file_name": file_name,
                     "file_type": file_type,
-                    "status": "skipped_glue_job"
+                    "status": "skipped_glue_job_until_ecs_phase"
                 })
-
                 continue
 
             dataset_name, table_name, glue_job_run_id = start_glue_job(
@@ -382,18 +402,14 @@ def lambda_handler(event, context):
                 "status": "glue_job_started"
             })
 
-        return {
-            "statusCode": 200,
-            "body": json.dumps({
-                "status": "success",
-                "results": results
-            })
-        }
+        except Exception as e:
+            print("Error processing SQS message:", str(e))
+            raise
 
-    except Exception as e:
-        print("Lambda error:", str(e))
-
-        return {
-            "statusCode": 500,
-            "body": str(e)
-        }
+    return {
+        "statusCode": 200,
+        "body": json.dumps({
+            "status": "success",
+            "results": results
+        })
+    }
