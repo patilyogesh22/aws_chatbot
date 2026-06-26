@@ -284,8 +284,10 @@ def lambda_handler(event, context):
                 "dataset_name": dataset_name,
                 "table_name": table_name,
             }
-
+            print("About to start Step Function")
+            print("STEP_FUNCTION_ARN =", STEP_FUNCTION_ARN)
             execution_arn = start_step_function(payload)
+            print("Step Function started:", execution_arn)
 
             store_upload_event(
                 user_id=user_id,
