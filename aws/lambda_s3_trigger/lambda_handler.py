@@ -11,9 +11,17 @@ import psycopg2
 # -------------------------
 # AWS CLIENTS
 # -------------------------
+
+from botocore.config import Config
+
 stepfunctions = boto3.client(
     "stepfunctions",
-    region_name=os.getenv("AWS_REGION", "eu-north-1")
+    region_name=os.getenv("AWS_REGION", "eu-north-1"),
+    config=Config(
+        connect_timeout=5,
+        read_timeout=10,
+        retries={"max_attempts": 1}
+    )
 )
 
 
