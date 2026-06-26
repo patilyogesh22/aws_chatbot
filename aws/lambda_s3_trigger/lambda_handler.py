@@ -39,8 +39,8 @@ def get_conn():
         user=PG_USER,
         password=PG_PASSWORD,
         port=PG_PORT,
+        connect_timeout=5,
     )
-
 
 def clean_table_name(name: str):
     name = Path(name).stem.lower()
@@ -48,6 +48,7 @@ def clean_table_name(name: str):
     name = re.sub(r"_+", "_", name)
     return name.strip("_")
 
+print("Checking document exists in DB...")
 
 def document_exists(user_id, document_id):
     with get_conn() as conn:
