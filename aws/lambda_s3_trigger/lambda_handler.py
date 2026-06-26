@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 import boto3
 import psycopg2
-
+from botocore.exceptions import ClientError
 # -------------------------
 # AWS CLIENTS
 # -------------------------
@@ -255,8 +255,7 @@ def update_structured_dataset(
 
 # -------------------------
 # GLUE JOB
-# -------------------------
-def start_glue_job(bucket, key, user_id, document_id, file_name):
+# -------------------------def start_glue_job(bucket, key, user_id, document_id, file_name):
     dataset_name = clean_table_name(file_name)
 
     # Unique table per user + document
@@ -270,40 +269,44 @@ def start_glue_job(bucket, key, user_id, document_id, file_name):
     print("Dataset:", dataset_name)
     print("Table:", table_name)
 
-    response = glue.start_job_run(
-        JobName=GLUE_JOB_NAME,
-        Arguments={
-            "--S3_INPUT_PATH": s3_input_path,
-            "--TABLE_NAME": table_name,
-            "--USER_ID": str(user_id or 0),
-            "--DOCUMENT_ID": str(document_id or 0),
-            "--FILE_NAME": file_name,
-        }
-    )
+    try:
+        response = glue.start_job_run(
+            JobName=GLUE_JOB_NAME,
+            Arguments={
+                "--S3_INPUT_PATH": s3_input_path,
+                "--TABLE_NAME": table_name,
+                "--USER_ID": str(user_id or 0),
+                "--DOCUMENT_ID": str(document_id or 0),
+                "--FILE_NAME": file_name,
+            }
+        )
 
-    return dataset_name, table_name, response["JobRunId"]
+        return dataset_name, table_name, response["JobRunId"]
 
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "")
 
+        if error_code == "ConcurrentRunsExceededException":
+            print("Glue is busy. Will retry message later from SQS.")
+
+            # Do not mark failed permanently.
+            # Raise error so Lambda fails this message.
+            # SQS will retry after visibility timeout.
+            raise
+
+        print("Glue StartJobRun failed:", str(e))
+        raise
 # -------------------------
 # LAMBDA HANDLER
 # -------------------------
 
 def lambda_handler(event, context):
     """
-    New trigger:
+    Trigger:
     SQS → Lambda → Glue
 
-    FastAPI sends this message to SQS:
-    {
-        "user_id": 1,
-        "document_id": 75,
-        "file_name": "employee.csv",
-        "file_type": "structured",
-        "bucket": "your-bucket",
-        "s3_key": "uploads/user_1/structured/employee.csv",
-        "s3_path": "s3://your-bucket/uploads/user_1/structured/employee.csv",
-        "file_size": 12345
-    }
+    This handler safely skips invalid/test messages and processes only valid
+    FastAPI file-processing messages.
     """
 
     print("SQS EVENT RECEIVED")
@@ -313,7 +316,32 @@ def lambda_handler(event, context):
 
     for record in event.get("Records", []):
         try:
-            body = json.loads(record["body"])
+            body = json.loads(record.get("body", "{}"))
+
+            print("SQS BODY:", json.dumps(body))
+
+            required_keys = [
+                "bucket",
+                "s3_key",
+                "file_name",
+                "user_id",
+                "document_id",
+                "file_type",
+            ]
+
+            missing_keys = [key for key in required_keys if key not in body]
+
+            if missing_keys:
+                print("Invalid SQS message. Missing keys:", missing_keys)
+                print("Skipping message:", body)
+
+                results.append({
+                    "status": "skipped_invalid_message",
+                    "missing_keys": missing_keys,
+                    "body": body,
+                })
+
+                continue
 
             bucket = body["bucket"]
             key = body["s3_key"]
@@ -337,11 +365,13 @@ def lambda_handler(event, context):
 
             if file_type == "unknown":
                 print("Unsupported file type. Skipping:", file_name)
+
                 results.append({
                     "file_name": file_name,
                     "file_type": file_type,
                     "status": "skipped_unknown_file"
                 })
+
                 continue
 
             if file_type != "structured":
@@ -360,6 +390,7 @@ def lambda_handler(event, context):
                     "file_type": file_type,
                     "status": "skipped_glue_job_until_ecs_phase"
                 })
+
                 continue
 
             dataset_name, table_name, glue_job_run_id = start_glue_job(
