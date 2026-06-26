@@ -297,6 +297,24 @@ def start_glue_job(bucket, key, user_id, document_id, file_name):
 
         print("Glue StartJobRun failed:", str(e))
         raise
+
+def document_exists(user_id, document_id):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 1
+                    FROM app_documents
+                    WHERE id = %s
+                      AND user_id = %s
+                    LIMIT 1
+                """, (document_id, user_id))
+
+                return cur.fetchone() is not None
+
+    except Exception as e:
+        print("Error checking document existence:", str(e))
+        raise
 # -------------------------
 # LAMBDA HANDLER
 # -------------------------
@@ -358,6 +376,18 @@ def lambda_handler(event, context):
             print("File type:", file_type)
             print("Document ID:", document_id)
             print("S3 Key:", key)
+
+            if not document_exists(user_id, document_id):
+                print(f"Document was deleted. Skipping message. document_id={document_id}")
+
+                results.append({
+                    "status": "skipped_deleted_document",
+                    "document_id": document_id,
+                    "file_name": file_name,
+                    "s3_key": key
+                })
+
+                continue
 
             if not document_id:
                 raise Exception(
