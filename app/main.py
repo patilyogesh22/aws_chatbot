@@ -14,6 +14,7 @@ from app.routes import history
 from app.routes import stats
 from app.routes import internal_dbt
 
+
 app = FastAPI(
     title="RAG Chatbot API Authenticated",
     version="3.5.0"
