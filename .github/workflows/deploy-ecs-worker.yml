@@ -1,0 +1,48 @@
+name: Deploy ECS Worker Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "aws/ecs_ingestion_worker.py"
+      - "docker/Dockerfile.ingestion"
+      - "app/services/**"
+      - "app/config.py"
+      - "dbt_chatbot/**"
+      - "requirements-core.txt"
+      - "requirements-ml.txt"
+      - ".github/workflows/deploy-ecs-worker.yml"
+
+jobs:
+  deploy-ecs-worker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-north-1
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region eu-north-1 \
+          | docker login --username AWS --password-stdin 815512685419.dkr.ecr.eu-north-1.amazonaws.com
+
+      - name: Build ECS ingestion image
+        run: |
+          docker build -t chatbot-ingestion \
+            -f docker/Dockerfile.ingestion .
+
+      - name: Tag ECS ingestion image
+        run: |
+          docker tag chatbot-ingestion:latest \
+            815512685419.dkr.ecr.eu-north-1.amazonaws.com/chatbot-ingestion:latest
+
+      - name: Push ECS ingestion image to ECR
+        run: |
+          docker push \
+            815512685419.dkr.ecr.eu-north-1.amazonaws.com/chatbot-ingestion:latest

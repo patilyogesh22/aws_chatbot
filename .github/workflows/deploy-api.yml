@@ -1,0 +1,40 @@
+name: Deploy API and Frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "frontend/**"
+      - "docker/**"
+      - "migrations/**"
+      - "requirements-core.txt"
+      - "requirements-ml.txt"
+      - ".github/workflows/deploy-api.yml"
+
+jobs:
+  deploy-api:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_KEY }}
+          command_timeout: 30m
+          script: |
+            cd ~/aws_chatbot
+            git fetch origin main
+            git reset --hard origin/main
+
+            cd docker
+            docker compose down
+            docker compose up -d --build api
+            docker compose exec -T api python migrations/run_migrations.py
+
+            sudo nginx -t
+            sudo systemctl restart nginx
