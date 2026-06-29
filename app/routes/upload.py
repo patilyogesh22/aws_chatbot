@@ -314,33 +314,26 @@ async def upload_file(
                 )
 
         # Unstructured file flow:
-        # Keep current backend processing until ECS Fargate phase
-        chunks = ingest_file_from_s3_key(
-            bucket=s3_bucket,
-            s3_key=s3_key,
+        sqs_message_id = send_file_to_queue(
+            user_id=current_user["id"],
+            document_id=document_id,
             file_name=original_filename,
-            file_hash=file_hash,
-            user_id=current_user["id"],
-            document_id=document_id
-        )
-
-        dbt_status = run_dbt_build()
-
-        embedded_count = embed_from_postgres(
-            user_id=current_user["id"],
-            file_name=original_filename
+            file_type=file_type,
+            s3_bucket=s3_bucket,
+            s3_key=s3_key,
+            file_size=file_size,
         )
 
         return {
             "status": "success",
             "file_type": "unstructured",
-            "message": "Unstructured file processed and embedded successfully.",
+            "message": "Unstructured file uploaded successfully and sent to SQS for ECS background processing.",
             "file": original_filename,
+            "s3_key": s3_key,
             "file_size": file_size,
             "document_id": document_id,
-            "chunks": len(chunks),
-            "embedded": embedded_count,
-            "dbt_status": dbt_status,
+            "sqs_message_id": sqs_message_id,
+            "next_step": "SQS → Lambda → Step Functions → ECS Fargate → chunks + embeddings"
         }
 
     except HTTPException:
@@ -390,7 +383,7 @@ async def retry_queue_document(
 
         _, user_id, file_name, file_type, s3_key, file_size, old_status = row
 
-        if file_type != "structured":
+        if file_type not in {"structured", "unstructured"}:
             raise HTTPException(
                 status_code=400,
                 detail="Retry queue is only for structured files currently"

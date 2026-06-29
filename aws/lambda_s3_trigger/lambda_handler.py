@@ -258,26 +258,6 @@ def lambda_handler(event, context):
 
                 continue
 
-            if file_type != "structured":
-                store_upload_event(
-                    user_id=user_id,
-                    file_name=file_name,
-                    key=key,
-                    bucket=bucket,
-                    size=size,
-                    file_type=file_type,
-                    document_id=document_id,
-                    status="skipped_until_ecs_phase",
-                )
-
-                results.append({
-                    "file_name": file_name,
-                    "file_type": file_type,
-                    "status": "skipped_until_ecs_phase",
-                })
-
-                continue
-
             dataset_name = clean_table_name(file_name)
             table_name = f"u{int(user_id)}_d{int(document_id)}_{dataset_name}"
 

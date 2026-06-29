@@ -1,4 +1,4 @@
-name: Deploy EC2 API/Frontend and AWS Lambda/Glue
+name: Deploy EC2 API/Frontend and AWS Lambda/Glue/ECS
 
 on:
   push:
@@ -24,6 +24,29 @@ jobs:
           aws-region: eu-north-1
 
       # ---------------------------------------
+      # Build and Push ECS Ingestion Image
+      # ---------------------------------------
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region eu-north-1 \
+          | docker login --username AWS --password-stdin 815512685419.dkr.ecr.eu-north-1.amazonaws.com
+
+      - name: Build ECS ingestion image
+        run: |
+          docker build -t chatbot-ingestion \
+            -f docker/Dockerfile.ingestion .
+
+      - name: Tag ECS ingestion image
+        run: |
+          docker tag chatbot-ingestion:latest \
+            815512685419.dkr.ecr.eu-north-1.amazonaws.com/chatbot-ingestion:latest
+
+      - name: Push ECS ingestion image to ECR
+        run: |
+          docker push \
+            815512685419.dkr.ecr.eu-north-1.amazonaws.com/chatbot-ingestion:latest
+
+      # ---------------------------------------
       # Upload Glue Job Script
       # ---------------------------------------
       - name: Upload Glue Job Script
@@ -32,7 +55,7 @@ jobs:
             s3://aws-glue-assets-815512685419-eu-north-1/scripts/glue_job.py
 
       # ---------------------------------------
-      # Build S3 Trigger Lambda Package
+      # Build S3/SQS Trigger Lambda Package
       # ---------------------------------------
       - name: Build S3 Trigger Lambda zip
         run: |
@@ -60,7 +83,7 @@ jobs:
           unzip -l lambda.zip
 
       # ---------------------------------------
-      # Deploy S3 Trigger Lambda
+      # Deploy S3/SQS Trigger Lambda
       # ---------------------------------------
       - name: Deploy S3 Trigger Lambda
         run: |
@@ -72,14 +95,13 @@ jobs:
             --function-name chatbot-s3-trigger
 
       # ---------------------------------------
-      # Update S3 Trigger Lambda Environment
+      # Update S3/SQS Trigger Lambda Environment
       # ---------------------------------------
       - name: Update S3 Trigger Lambda Environment
         run: |
           aws lambda update-function-configuration \
             --function-name chatbot-s3-trigger \
-            --environment "Variables={PG_HOST=${{ secrets.PG_HOST }},PG_DB=${{ secrets.PG_DB }},PG_USER=${{ secrets.PG_USER }},PG_PASSWORD=${{ secrets.PG_PASSWORD }},PG_PORT=5432,GLUE_JOB_NAME=structured-file-etl-job,STEP_FUNCTION_ARN=${{ secrets.STEP_FUNCTION_ARN }}}"
-
+            --environment "Variables={PG_HOST=${{ secrets.PG_HOST }},PG_DB=${{ secrets.PG_DB }},PG_USER=${{ secrets.PG_USER }},PG_PASSWORD=${{ secrets.PG_PASSWORD }},PG_PORT=5432,GLUE_JOB_NAME=structured-file-etl-job,STEP_FUNCTION_ARN=${{ secrets.STEP_FUNCTION_ARN }},AWS_REGION=eu-north-1}"
           aws lambda wait function-updated-v2 \
             --function-name chatbot-s3-trigger
 
@@ -121,7 +143,6 @@ jobs:
           aws lambda update-function-configuration \
             --function-name chatbot-run-dbt-after-glue \
             --environment "Variables={API_URL=${{ secrets.API_URL }},INTERNAL_API_KEY=${{ secrets.INTERNAL_API_KEY }},GLUE_JOB_NAME=structured-file-etl-job}"
-
 
           aws lambda wait function-updated-v2 \
             --function-name chatbot-run-dbt-after-glue
