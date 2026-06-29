@@ -212,6 +212,29 @@ const apiGet    = p        => apiFetch(p);
 const apiPost   = (p,b,f)  => apiFetch(p, { method:'POST', body: f ? b : JSON.stringify(b) });
 const apiDelete = p        => apiFetch(p, { method:'DELETE' });
 
+
+
+function getApiErrorMessage(data, fallback = 'Request failed') {
+  if (!data) return fallback;
+
+  if (typeof data.detail === 'string') {
+    return data.detail;
+  }
+
+  if (data.detail && typeof data.detail.message === 'string') {
+    return data.detail.message;
+  }
+
+  if (typeof data.error === 'string') {
+    return data.error;
+  }
+
+  if (typeof data.message === 'string') {
+    return data.message;
+  }
+
+  return fallback;
+}
 /* ─────────────────────────────────────────────────────────────
    UTILS
 ───────────────────────────────────────────────────────────── */
@@ -945,10 +968,14 @@ ingestBtn.addEventListener('click', async () => {
     if (isStruct) {
       startStatusPolling(fileName);
     }
-  } else if (status === 400 && (data.detail||'').toLowerCase().includes('duplicate')) {
-    toast('File already uploaded — skipped.', 'warning');
   } else {
-    toast('Upload failed: ' + (data.detail || data.error || 'Unknown error'), 'error');
+      const message = getApiErrorMessage(data, 'Upload failed');
+
+      if (message.toLowerCase().includes('duplicate')) {
+          toast(message, 'warning');
+      } else {
+          toast('Upload failed: ' + message, 'error');
+      }
   }
 });
 

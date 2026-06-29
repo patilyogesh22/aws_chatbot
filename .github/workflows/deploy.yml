@@ -1,0 +1,175 @@
+name: Deploy EC2 API/Frontend and AWS Lambda/Glue/ECS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ---------------------------------------
+      # AWS Credentials
+      # ---------------------------------------
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-north-1
+
+      # ---------------------------------------
+      # Build and Push ECS Ingestion Image
+      # ---------------------------------------
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region eu-north-1 \
+          | docker login --username AWS --password-stdin 815512685419.dkr.ecr.eu-north-1.amazonaws.com
+
+      - name: Build ECS ingestion image
+        run: |
+          docker build -t chatbot-ingestion \
+            -f docker/Dockerfile.ingestion .
+
+      - name: Tag ECS ingestion image
+        run: |
+          docker tag chatbot-ingestion:latest \
+            815512685419.dkr.ecr.eu-north-1.amazonaws.com/chatbot-ingestion:latest
+
+      - name: Push ECS ingestion image to ECR
+        run: |
+          docker push \
+            815512685419.dkr.ecr.eu-north-1.amazonaws.com/chatbot-ingestion:latest
+
+      # ---------------------------------------
+      # Upload Glue Job Script
+      # ---------------------------------------
+      - name: Upload Glue Job Script
+        run: |
+          aws s3 cp aws/glue/glue_job.py \
+            s3://aws-glue-assets-815512685419-eu-north-1/scripts/glue_job.py
+
+      # ---------------------------------------
+      # Build S3/SQS Trigger Lambda Package
+      # ---------------------------------------
+      - name: Build S3 Trigger Lambda zip
+        run: |
+          cd aws/lambda_s3_trigger
+
+          rm -rf package lambda.zip
+          mkdir package
+
+          python -m pip install --upgrade pip
+
+          pip install \
+            --platform manylinux2014_x86_64 \
+            --target package \
+            --implementation cp \
+            --python-version 3.11 \
+            --only-binary=:all: \
+            -r requirements-lambda.txt
+
+          cp lambda_handler.py package/
+
+          cd package
+          zip -r ../lambda.zip .
+          cd ..
+
+          unzip -l lambda.zip
+
+      # ---------------------------------------
+      # Deploy S3/SQS Trigger Lambda
+      # ---------------------------------------
+      - name: Deploy S3 Trigger Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name chatbot-s3-trigger \
+            --zip-file fileb://aws/lambda_s3_trigger/lambda.zip
+
+          aws lambda wait function-updated-v2 \
+            --function-name chatbot-s3-trigger
+
+      # ---------------------------------------
+      # Update S3/SQS Trigger Lambda Environment
+      # ---------------------------------------
+      - name: Update S3 Trigger Lambda Environment
+        run: |
+          aws lambda update-function-configuration \
+            --function-name chatbot-s3-trigger \
+            --environment "Variables={PG_HOST=${{ secrets.PG_HOST }},PG_DB=${{ secrets.PG_DB }},PG_USER=${{ secrets.PG_USER }},PG_PASSWORD=${{ secrets.PG_PASSWORD }},PG_PORT=5432,GLUE_JOB_NAME=structured-file-etl-job,STEP_FUNCTION_ARN=${{ secrets.STEP_FUNCTION_ARN }}}"
+          aws lambda wait function-updated-v2 \
+            --function-name chatbot-s3-trigger
+
+      # ---------------------------------------
+      # Build Run DBT After Glue Lambda Package
+      # ---------------------------------------
+      - name: Build Run DBT After Glue Lambda zip
+        run: |
+          cd aws/lambda_run_dbt_after_glue
+
+          rm -rf package lambda.zip
+          mkdir package
+
+          cp lambda_handler.py package/
+
+          cd package
+          zip -r ../lambda.zip .
+          cd ..
+
+          unzip -l lambda.zip
+
+      # ---------------------------------------
+      # Deploy Run DBT After Glue Lambda
+      # ---------------------------------------
+      - name: Deploy Run DBT After Glue Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name chatbot-run-dbt-after-glue \
+            --zip-file fileb://aws/lambda_run_dbt_after_glue/lambda.zip
+
+          aws lambda wait function-updated-v2 \
+            --function-name chatbot-run-dbt-after-glue
+
+      # ---------------------------------------
+      # Update Run DBT Lambda Environment
+      # ---------------------------------------
+      - name: Update Run DBT Lambda Environment
+        run: |
+          aws lambda update-function-configuration \
+            --function-name chatbot-run-dbt-after-glue \
+            --environment "Variables={API_URL=${{ secrets.API_URL }},INTERNAL_API_KEY=${{ secrets.INTERNAL_API_KEY }},GLUE_JOB_NAME=structured-file-etl-job}"
+
+          aws lambda wait function-updated-v2 \
+            --function-name chatbot-run-dbt-after-glue
+
+      # ---------------------------------------
+      # Deploy EC2 + Run DB Migrations
+      # ---------------------------------------
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_KEY }}
+          command_timeout: 30m
+          script: |
+            cd ~/aws_chatbot
+
+            git fetch origin main
+            git reset --hard origin/main
+
+            cd docker
+
+            docker compose down
+
+            docker compose up -d --build api
+
+            docker compose exec -T api python migrations/run_migrations.py
+
+            sudo nginx -t
+            sudo systemctl restart nginx
