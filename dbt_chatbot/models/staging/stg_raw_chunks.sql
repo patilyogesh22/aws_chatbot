@@ -1,7 +1,11 @@
 -- models/staging/stg_raw_chunks.sql
 -- Cleans and validates raw ingested chunks from PostgreSQL
 -- User-aware staging model
-
+{{
+  config(
+    tags=['unstructured']
+  )
+}}
 
 SELECT
     chunk_id,

@@ -1,7 +1,11 @@
 -- models/marts/mart_processed_chunks.sql
 -- Final, deduplicated, enriched chunk table consumed by the embedding pipeline
 -- User-aware version: keeps user_id, document_id, and file_hash for authentication isolation
-
+{{
+  config(
+    tags=['unstructured']
+  )
+}}
 WITH ranked AS (
     SELECT
         chunk_id,
