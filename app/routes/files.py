@@ -16,10 +16,13 @@ def list_files(current_user: dict = Depends(get_current_user)):
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT
+                        d.id,
                         d.file_name,
                         COALESCE(d.file_type, 'unknown') AS file_type,
                         d.file_size,
                         d.uploaded_at,
+                        COALESCE(d.processing_status, 'upload_saved') AS processing_status,
+                        d.processing_error,
                         COALESCE(COUNT(r.chunk_id), 0) AS chunk_count
                     FROM app_documents d
                     LEFT JOIN raw_chunks r
@@ -31,7 +34,9 @@ def list_files(current_user: dict = Depends(get_current_user)):
                         d.file_name,
                         d.file_type,
                         d.file_size,
-                        d.uploaded_at
+                        d.uploaded_at,
+                        d.processing_status,
+                        d.processing_error
                     ORDER BY d.uploaded_at DESC
                 """, (current_user["id"],))
 
@@ -40,11 +45,15 @@ def list_files(current_user: dict = Depends(get_current_user)):
         return {
             "files": [
                 {
-                    "name": r[0],
-                    "file_type": r[1],
-                    "size": r[2] or 0,
-                    "uploaded_at": r[3].isoformat() if r[3] else None,
-                    "chunks": r[4] or 0,
+                    "document_id": r[0],
+                    "name": r[1],
+                    "file_type": r[2],
+                    "size": r[3] or 0,
+                    "uploaded_at": r[4].isoformat() if r[4] else None,
+                    "processing_status": r[5],
+                    "processing_error": r[6],
+                    "chunks": r[7] or 0,
+                    "ready": r[5] == "ready",
                 }
                 for r in rows
             ]
@@ -81,11 +90,22 @@ def structured_status(
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT status, table_name, row_count, glue_job_run_id, updated_at
-                FROM structured_datasets
-                WHERE user_id = %s
-                  AND file_name = %s
-                ORDER BY id DESC
+                SELECT
+                    d.file_type,
+                    COALESCE(d.processing_status, 'upload_saved') AS processing_status,
+                    d.processing_error,
+                    COALESCE(sd.status, '') AS structured_status,
+                    sd.table_name,
+                    sd.row_count,
+                    sd.glue_job_run_id,
+                    COALESCE(sd.updated_at, d.updated_at, d.uploaded_at) AS updated_at
+                FROM app_documents d
+                LEFT JOIN structured_datasets sd
+                  ON sd.document_id = d.id
+                 AND sd.user_id = d.user_id
+                WHERE d.user_id = %s
+                  AND d.file_name = %s
+                ORDER BY d.id DESC
                 LIMIT 1
             """, (current_user["id"], file_name))
 
@@ -99,22 +119,41 @@ def structured_status(
             "message": "File not found. Please upload it first.",
         }
 
-    status, table_name, row_count, run_id, updated_at = row
+    (
+        file_type,
+        processing_status,
+        processing_error,
+        structured_status,
+        table_name,
+        row_count,
+        run_id,
+        updated_at,
+    ) = row
+
+    status = structured_status if file_type == "structured" and structured_status else processing_status
 
     messages = {
+        "upload_saved": "File uploaded. Waiting to be queued…",
+        "sqs_queued": "File queued for background processing…",
+        "step_function_started": "Workflow started. Processing will begin shortly…",
+        "processing": "File is being processed…",
         "glue_job_pending": "File uploaded. Waiting for AWS Glue to start…",
-        "glue_job_started": "AWS Glue is processing your file (1–3 min)…",
+        "glue_job_started": "AWS Glue is processing your file…",
         "ready": "File is ready. You can ask questions now.",
         "error": "Processing failed. Please re-upload the file.",
+        "sqs_failed": "Failed to send file to processing queue.",
+        "not_found": "File not found. Please upload it first.",
     }
 
     return {
         "file_name": file_name,
+        "file_type": file_type,
         "status": status,
         "ready": status == "ready",
         "table_name": table_name,
         "row_count": row_count,
         "glue_job_run_id": run_id,
+        "processing_error": processing_error,
         "updated_at": updated_at.isoformat() if updated_at else None,
-        "message": messages.get(status, f"Status: {status}"),
+        "message": processing_error or messages.get(status, f"Status: {status}"),
     }

@@ -192,6 +192,23 @@ def start_step_function(payload):
     print("Step Function started:", response["executionArn"])
     return response["executionArn"]
 
+def update_document_status(user_id, document_id, status, error=None):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE app_documents
+                SET processing_status = %s,
+                    processing_error = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND user_id = %s
+            """, (
+                status,
+                error,
+                document_id,
+                user_id,
+            ))
+        conn.commit()
 
 def lambda_handler(event, context):
     """
@@ -277,6 +294,11 @@ def lambda_handler(event, context):
             print("STEP_FUNCTION_ARN =", STEP_FUNCTION_ARN)
             execution_arn = start_step_function(payload)
             print("Step Function started:", execution_arn)
+            update_document_status(
+                user_id=user_id,
+                document_id=document_id,
+                status="step_function_started",
+            )
 
             store_upload_event(
                 user_id=user_id,
@@ -291,16 +313,17 @@ def lambda_handler(event, context):
                 status="step_function_started",
             )
 
-            update_structured_dataset(
-                user_id=user_id,
-                document_id=document_id,
-                file_name=file_name,
-                s3_key=key,
-                dataset_name=dataset_name,
-                table_name=table_name,
-                glue_job_run_id=execution_arn,
-                status="step_function_started",
-            )
+            if file_type == "structured":
+                update_structured_dataset(
+                    user_id=user_id,
+                    document_id=document_id,
+                    file_name=file_name,
+                    s3_key=key,
+                    dataset_name=dataset_name,
+                    table_name=table_name,
+                    glue_job_run_id=execution_arn,
+                    status="step_function_started",
+                )
 
             results.append({
                 "file_name": file_name,

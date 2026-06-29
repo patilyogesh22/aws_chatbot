@@ -88,11 +88,16 @@ function resetActivityTimer() {
 ───────────────────────────────────────────────────────────── */
 
 const STATUS_ICONS = {
-  glue_job_pending:  { icon: '⏳', label: 'Pending',    cls: 'status-pending'  },
-  glue_job_started:  { icon: '⚙️', label: 'Processing', cls: 'status-running'  },
-  ready:             { icon: '✅', label: 'Ready',       cls: 'status-ready'    },
-  error:             { icon: '❌', label: 'Failed',      cls: 'status-error'    },
-  not_found:         { icon: '❓', label: 'Unknown',     cls: 'status-unknown'  },
+  upload_saved:           { icon: '📤', label: 'Uploaded',          cls: 'status-pending'  },
+  sqs_queued:             { icon: '📨', label: 'Queued',            cls: 'status-pending'  },
+  step_function_started:  { icon: '🔁', label: 'Workflow Started',  cls: 'status-running'  },
+  processing:             { icon: '⚙️', label: 'Processing',        cls: 'status-running'  },
+  glue_job_pending:       { icon: '⏳', label: 'Pending',           cls: 'status-pending'  },
+  glue_job_started:       { icon: '⚙️', label: 'Processing',        cls: 'status-running'  },
+  ready:                  { icon: '✅', label: 'Ready',             cls: 'status-ready'    },
+  error:                  { icon: '❌', label: 'Failed',            cls: 'status-error'    },
+  sqs_failed:             { icon: '❌', label: 'Queue Failed',      cls: 'status-error'    },
+  not_found:              { icon: '❓', label: 'Unknown',           cls: 'status-unknown'  },
 };
 
 async function fetchFileStatus(fileName) {
@@ -401,13 +406,25 @@ function renderFiles(files) {
 
     // Status badge for structured files
     // Status badge — structured files poll Glue; unstructured show Ready immediately
-    const statusBadge = f.file_type === 'structured'
-      ? renderFileStatusBadge(f.name)
-      : `<span class="file-status-badge status-ready" title="Embedded and ready to chat">✅ Ready</span>`;
+    const rawStatus =
+      f.processing_status ||
+      f.status ||
+      (f.file_type === 'structured'
+        ? state.fileStatuses[f.name]?.status
+        : 'upload_saved');
 
+    state.fileStatuses[f.name] = {
+      ...(state.fileStatuses[f.name] || {}),
+      status: rawStatus,
+      ready: rawStatus === 'ready',
+      message: f.processing_error || '',
+      row_count: f.row_count || null,
+    };
+
+    const statusBadge = renderFileStatusBadge(f.name);
     // If structured and not ready, grey out the card
     const statusInfo = state.fileStatuses[f.name];
-    const notReady = f.file_type === 'structured' && statusInfo && !statusInfo.ready;
+    const notReady = statusInfo && !statusInfo.ready;
     const cardCls = `file-card ${active} ${notReady ? 'file-not-ready' : ''}`;
 
     return `
@@ -436,7 +453,7 @@ function renderFiles(files) {
       const deselect  = state.selectedFile === name;
 
       // Block click on structured files not yet ready
-      if (!deselect && fileType === 'structured') {
+      if (!deselect) {
         const statusInfo = state.fileStatuses[name];
         if (statusInfo && !statusInfo.ready) {
           toast(`⏳ ${name} is still processing. ${statusInfo.message || 'Please wait.'}`, 'warning');
@@ -908,7 +925,14 @@ ingestBtn.addEventListener('click', async () => {
         row_count: null,
       };
     } else {
-      toast(`✅ ${fileName} ingested · ${chunks} chunks`, 'success');
+      toast(`📤 ${fileName} uploaded and queued for background processing…`, 'info');
+      state.fileStatuses[fileName] = {
+        status: 'sqs_queued',
+        ready: false,
+        message: 'File queued for ECS background processing…',
+        row_count: null,
+      };
+      startStatusPolling(fileName);
     }
 
     state.pendingFile = null;
