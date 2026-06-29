@@ -1,6 +1,9 @@
 import os
 import sys
+import textwrap
 import subprocess
+from pathlib import Path
+
 import psycopg2
 
 from app.config import PG_DSN
@@ -36,24 +39,70 @@ def mark_status(status: str, error: str | None = None):
     print(f"[worker] Status changed to {status}")
 
 
+def create_dbt_profile():
+    """
+    Create /root/.dbt/profiles.yml dynamically inside ECS.
+    """
+
+    profile_dir = Path("/root/.dbt")
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    profile = textwrap.dedent(f"""
+    dbt_chatbot:
+      target: dev
+      outputs:
+        dev:
+          type: postgres
+          host: {os.environ["PG_HOST"]}
+          user: {os.environ["PG_USER"]}
+          password: {os.environ["PG_PASSWORD"]}
+          port: {os.environ["PG_PORT"]}
+          dbname: {os.environ["PG_DB"]}
+          schema: public
+          threads: 4
+    """)
+
+    profile_path = profile_dir / "profiles.yml"
+
+    with open(profile_path, "w") as f:
+        f.write(profile)
+
+    print(f"[worker] Created dbt profile: {profile_path}")
+
+
 def run_dbt():
+    create_dbt_profile()
+
     result = subprocess.run(
-        ["dbt", "build", "--select", "tag:unstructured"],
+        [
+            "dbt",
+            "build",
+            "--profiles-dir",
+            "/root/.dbt",
+            "--select",
+            "tag:unstructured",
+        ],
         cwd="/app/dbt_chatbot",
         capture_output=True,
         text=True,
         timeout=180,
     )
 
-    print("[dbt stdout]", result.stdout[-1000:])
-    print("[dbt stderr]", result.stderr[-1000:])
+    print("[dbt stdout]")
+    print(result.stdout)
+
+    print("[dbt stderr]")
+    print(result.stderr)
 
     if result.returncode != 0:
         raise Exception("dbt build failed")
 
 
 def main():
+    print("=" * 60)
     print("[worker] Starting ECS unstructured ingestion")
+    print("=" * 60)
+
     print("S3_BUCKET:", S3_BUCKET)
     print("S3_KEY:", S3_KEY)
     print("USER_ID:", USER_ID)
@@ -83,10 +132,17 @@ def main():
         print(f"[worker] Embeddings created: {embedded_count}")
 
         mark_status("ready")
+
+        print("=" * 60)
         print("[worker] Completed successfully")
+        print("=" * 60)
 
     except Exception as e:
-        print("[worker] Failed:", str(e))
+        print("=" * 60)
+        print("[worker] Failed")
+        print(str(e))
+        print("=" * 60)
+
         mark_status("error", str(e))
         sys.exit(1)
 
