@@ -18,6 +18,28 @@ DOCUMENT_ID = int(os.environ["DOCUMENT_ID"])
 FILE_NAME = os.environ["FILE_NAME"]
 
 
+def get_file_hash():
+    with psycopg2.connect(PG_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT file_hash
+                FROM app_documents
+                WHERE id = %s
+                  AND user_id = %s
+                LIMIT 1
+            """, (
+                DOCUMENT_ID,
+                USER_ID,
+            ))
+
+            row = cur.fetchone()
+
+    if not row or not row[0]:
+        raise Exception(f"file_hash not found for document_id={DOCUMENT_ID}")
+
+    return row[0]
+
+
 def mark_status(status: str, error: str | None = None):
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
@@ -40,10 +62,6 @@ def mark_status(status: str, error: str | None = None):
 
 
 def create_dbt_profile():
-    """
-    Create /root/.dbt/profiles.yml dynamically inside ECS.
-    """
-
     profile_dir = Path("/root/.dbt")
     profile_dir.mkdir(parents=True, exist_ok=True)
 
@@ -112,10 +130,14 @@ def main():
     try:
         mark_status("processing")
 
+        file_hash = get_file_hash()
+        print("[worker] file_hash:", file_hash)
+
         chunks = ingest_file_from_s3_key(
             bucket=S3_BUCKET,
             s3_key=S3_KEY,
             file_name=FILE_NAME,
+            file_hash=file_hash,
             user_id=USER_ID,
             document_id=DOCUMENT_ID,
         )
