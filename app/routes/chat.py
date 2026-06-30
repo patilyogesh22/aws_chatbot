@@ -17,20 +17,13 @@ router = APIRouter()
 
 class ChatRequest(BaseModel):
     question: str
-    file_name: Optional[str] = None              # old single-file support
-    file_names: Optional[list[str]] = None       # new multi-file support
+    file_name: Optional[str] = None
+    file_names: Optional[list[str]] = None
     top_k: Optional[int] = 5
     chat_history: Optional[list] = []
 
 
 def _normalise_file_scope(req: ChatRequest) -> list[str]:
-    """
-    Build a clean selected-file list.
-
-    Backward compatible:
-    - old frontend sends file_name
-    - new frontend sends file_names
-    """
     files: list[str] = []
 
     if req.file_names:
@@ -39,9 +32,9 @@ def _normalise_file_scope(req: ChatRequest) -> list[str]:
     if req.file_name:
         files.append(req.file_name)
 
-    # remove duplicates but preserve order
     seen = set()
     result = []
+
     for f in files:
         if f not in seen:
             result.append(f)
@@ -124,11 +117,6 @@ def _save_chat_history(
 
 
 def _answer_single_file(req: ChatRequest, user_id: int, file_name: Optional[str]):
-    """
-    Existing single-file behavior.
-    Structured file -> NL-to-SQL.
-    Unstructured/no file -> RAG.
-    """
     if file_name:
         file_types = _get_selected_file_types(user_id, [file_name])
         file_type = file_types.get(file_name)
@@ -215,13 +203,6 @@ def _answer_single_file(req: ChatRequest, user_id: int, file_name: Optional[str]
 
 
 def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]):
-    """
-    New multi-file behavior.
-
-    - Structured files are queried one by one using NL-to-SQL.
-    - Unstructured files are searched together using pgvector/RAG.
-    - The final answer is synthesized by the LLM.
-    """
     file_types = _get_selected_file_types(user_id, selected_files)
 
     missing_files = [f for f in selected_files if f not in file_types]
@@ -241,7 +222,6 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
     per_file_answers = []
     all_chunks = []
 
-    # 1. Structured files: query separately
     for file_name in structured_files:
         try:
             structured_response = answer_structured_question(
@@ -258,7 +238,10 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
                 "table_name": structured_response.get("table_name"),
                 "rows": structured_response.get("rows", []),
                 "columns": structured_response.get("columns", []),
-                "row_count": structured_response.get("row_count", 0),
+                "row_count": structured_response.get(
+                    "row_count",
+                    len(structured_response.get("rows", []))
+                ),
             })
 
         except Exception as e:
@@ -267,12 +250,13 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
                 "file_type": "structured",
                 "answer": f"Structured query failed: {str(e)}",
                 "error": str(e),
+                "sql": None,
+                "table_name": None,
                 "rows": [],
                 "columns": [],
                 "row_count": 0,
             })
 
-    # 2. Unstructured files: retrieve across all selected unstructured files
     if unstructured_files:
         chunks = retrieve(
             req.question,
@@ -280,6 +264,7 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
             top_k=req.top_k,
             file_names=unstructured_files,
         )
+
         all_chunks.extend(chunks)
 
         if chunks:
@@ -292,6 +277,9 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
                 "answer": rag_answer,
                 "chunks": chunks,
                 "sources": list({c["file_name"] for c in chunks}),
+                "rows": [],
+                "columns": [],
+                "row_count": 0,
             })
         else:
             per_file_answers.append({
@@ -300,6 +288,9 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
                 "answer": "No relevant chunks were found in the selected unstructured files.",
                 "chunks": [],
                 "sources": unstructured_files,
+                "rows": [],
+                "columns": [],
+                "row_count": 0,
             })
 
     if not per_file_answers:
@@ -309,6 +300,45 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
     else:
         final_answer = synthesise_multi_file_answer(req.question, per_file_answers)
 
+    multi_sql = [
+        {
+            "file_name": item.get("file_name"),
+            "sql": item.get("sql"),
+            "table_name": item.get("table_name"),
+        }
+        for item in per_file_answers
+        if item.get("sql")
+    ]
+
+    multi_tables = [
+        {
+            "file_name": item.get("file_name"),
+            "table_name": item.get("table_name"),
+        }
+        for item in per_file_answers
+        if item.get("table_name")
+    ]
+
+    multi_rows = [
+        {
+            "file_name": item.get("file_name") or ", ".join(item.get("file_names", [])),
+            "rows": item.get("rows", []),
+        }
+        for item in per_file_answers
+        if item.get("rows")
+    ]
+
+    multi_columns = [
+        {
+            "file_name": item.get("file_name") or ", ".join(item.get("file_names", [])),
+            "columns": item.get("columns", []),
+        }
+        for item in per_file_answers
+        if item.get("columns")
+    ]
+
+    total_row_count = sum(item.get("row_count", 0) or 0 for item in per_file_answers)
+
     _save_chat_history(
         user_id=user_id,
         question=req.question,
@@ -316,6 +346,11 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
         file_name=None,
         file_names=selected_files,
         file_type="multi",
+        generated_sql=json.dumps(multi_sql),
+        table_name=json.dumps(multi_tables),
+        rows=multi_rows,
+        columns=multi_columns,
+        row_count=total_row_count,
         chat_type="multi",
     )
 
@@ -326,6 +361,11 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
         "chunks": all_chunks,
         "chunks_used": len(all_chunks),
         "file_type": "multi",
+        "sql": multi_sql,
+        "table_name": multi_tables,
+        "rows": multi_rows,
+        "columns": multi_columns,
+        "row_count": total_row_count,
         "model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
     }
 
@@ -341,10 +381,8 @@ def chat(
     user_id = current_user["id"]
     selected_files = _normalise_file_scope(req)
 
-    # New multi-file path
     if len(selected_files) > 1:
         return _answer_multi_file(req, user_id, selected_files)
 
-    # Old single-file path
     selected_file = selected_files[0] if selected_files else None
     return _answer_single_file(req, user_id, selected_file)

@@ -28,7 +28,6 @@ let state = {
   user:            null,
   messages:        [],
   selectedFile:    null,
-  selectedFiles:   [],
   showChunks:      false,
   topK:            5,
   theme:           'dark',
@@ -177,6 +176,8 @@ function stopAllPolling() {
 // Start polling for all pending structured files on load
 async function initStatusPolling(files) {
   for (const f of files) {
+    if (f.file_type !== 'structured') continue;
+
     const data = await fetchFileStatus(f.name);
     if (!data) continue;
 
@@ -233,6 +234,31 @@ function getApiErrorMessage(data, fallback = 'Request failed') {
   }
 
   return fallback;
+}
+
+function normalizeSqlList(sql) {
+  if (!sql) return [];
+
+  if (Array.isArray(sql)) {
+    return sql;
+  }
+
+  if (typeof sql === 'string') {
+    try {
+      const parsed = JSON.parse(sql);
+      if (Array.isArray(parsed)) return parsed;
+      if (parsed && typeof parsed === 'object') return [parsed];
+      return [{ sql }];
+    } catch {
+      return [{ sql }];
+    }
+  }
+
+  if (typeof sql === 'object') {
+    return [sql];
+  }
+
+  return [];
 }
 /* ─────────────────────────────────────────────────────────────
    UTILS
@@ -340,7 +366,6 @@ function forceLogout(reason) {
   clearTimeout(activityTimer);
   stopAllPolling();
   state = { token:null, user:null, messages:[], selectedFile:null,
-            selectedFiles: [],
             pendingFile:null, isTyping:false, showChunks: state.showChunks,
             topK: state.topK, theme: state.theme,
             fileStatuses: {}, statusPollers: {} };
@@ -421,7 +446,7 @@ function renderFiles(files) {
   }
 
   container.innerHTML = files.map(f => {
-    const active = (state.selectedFiles || []).includes(f.name) ? 'active' : '';
+    const active = f.name === state.selectedFile ? 'active' : '';
     const badgeCls = f.file_type === 'structured'   ? 'badge-structured' :
                      f.file_type === 'unstructured' ? 'badge-unstructured' : 'badge-unknown';
     const badgeTxt = f.file_type === 'structured'   ? '📊 structured' :
@@ -453,7 +478,6 @@ function renderFiles(files) {
     return `
       <div class="${cardCls}" data-name="${escapeHtml(f.name)}" data-type="${f.file_type}">
         <div class="fc-row">
-          <input type="checkbox" class="fc-select" data-select="${escapeHtml(f.name)}" ${(state.selectedFiles || []).includes(f.name) ? 'checked' : ''} title="Select for multi-file chat">
           <span class="fc-icon">${extIcon(f.name)}</span>
           <span class="fc-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
           <span class="fc-badge ${badgeCls}">${badgeTxt}</span>
@@ -468,66 +492,32 @@ function renderFiles(files) {
       </div>`;
   }).join('');
 
-  // File card click → single select
-  // Checkbox click → multi-select
+  // File card click → select + load history (ignore delete btn clicks)
   container.querySelectorAll('.file-card').forEach(card => {
     card.addEventListener('click', (e) => {
       if (e.target.closest('.fc-delete')) return; // handled separately
+      const name      = card.dataset.name;
+      const fileType  = card.dataset.type;
+      const deselect  = state.selectedFile === name;
 
-      const name = card.dataset.name;
-
-      const statusInfo = state.fileStatuses[name];
-      if (statusInfo && !statusInfo.ready) {
-        toast(`⏳ ${name} is still processing. ${statusInfo.message || 'Please wait.'}`, 'warning');
-        e.preventDefault();
-        return;
-      }
-
-      // Multi-file checkbox selection
-      if (e.target.closest('.fc-select')) {
-        const checked = e.target.checked;
-
-        if (checked) {
-          if (!state.selectedFiles.includes(name)) {
-            state.selectedFiles.push(name);
-          }
-        } else {
-          state.selectedFiles = state.selectedFiles.filter(f => f !== name);
+      // Block click on structured files not yet ready
+      if (!deselect) {
+        const statusInfo = state.fileStatuses[name];
+        if (statusInfo && !statusInfo.ready) {
+          toast(`⏳ ${name} is still processing. ${statusInfo.message || 'Please wait.'}`, 'warning');
+          return;
         }
-
-        state.selectedFile = state.selectedFiles.length === 1 ? state.selectedFiles[0] : null;
-
-        updateFilterBanner();
-        renderFiles(files);
-
-        if (state.selectedFiles.length === 1) {
-          loadHistoryForFile(state.selectedFiles[0]);
-        } else {
-          clearChat();
-          loadHistory(null);
-        }
-
-        return;
       }
 
-      // Normal card click = single-file selection
-      const alreadySingle =
-        state.selectedFiles.length === 1 &&
-        state.selectedFiles[0] === name;
-
-      if (alreadySingle) {
-        state.selectedFiles = [];
-        state.selectedFile = null;
-        clearChat();
-        loadHistory(null);
-      } else {
-        state.selectedFiles = [name];
-        state.selectedFile = name;
-        loadHistoryForFile(name);
-      }
-
+      state.selectedFile = deselect ? null : name;
       updateFilterBanner();
       renderFiles(files);
+      if (!deselect) {
+        loadHistoryForFile(name);
+      } else {
+        clearChat();
+        loadHistory(null);
+      }
     });
   });
 
@@ -749,24 +739,37 @@ function buildMsgEl(msg) {
     body.appendChild(expander);
   }
 
-  // Structured query details (SQL + table + row count)
+  // Structured query details (supports single-file SQL string and multi-file SQL list)
   if (msg.sql && msg.role === 'assistant') {
-    const sqlToggle = document.createElement('div');
-    sqlToggle.className = 'chunks-toggle';
-    sqlToggle.style.borderColor = 'rgba(34,211,238,0.3)';
-    sqlToggle.innerHTML = '📊 Structured Query Details';
-    body.appendChild(sqlToggle);
+    const sqlList = normalizeSqlList(msg.sql);
 
-    const sqlExpander = document.createElement('div');
-    sqlExpander.className = 'chunks-expander hidden sql-expander';
-    sqlExpander.innerHTML = `
-      <div class="sql-label">SQL Query</div>
-      <pre class="sql-code">${escapeHtml(msg.sql)}</pre>
-      ${msg.table_name ? `<div class="sql-meta">Table: <span class="sql-val">${escapeHtml(msg.table_name)}</span></div>` : ''}
-      ${msg.row_count != null ? `<div class="sql-meta">Rows returned: <span class="sql-val">${msg.row_count}</span></div>` : ''}
-    `;
-    sqlToggle.addEventListener('click', () => sqlExpander.classList.toggle('hidden'));
-    body.appendChild(sqlExpander);
+    if (sqlList.length) {
+      const sqlToggle = document.createElement('div');
+      sqlToggle.className = 'chunks-toggle';
+      sqlToggle.style.borderColor = 'rgba(34,211,238,0.3)';
+      sqlToggle.innerHTML = sqlList.length > 1
+        ? `📊 Structured Query Details (${sqlList.length} files)`
+        : '📊 Structured Query Details';
+      body.appendChild(sqlToggle);
+
+      const sqlExpander = document.createElement('div');
+      sqlExpander.className = 'chunks-expander hidden sql-expander';
+
+      sqlExpander.innerHTML = sqlList.map((item, index) => {
+        const fileName = item.file_name || item.file || `Query ${index + 1}`;
+        const sqlText = item.sql || (typeof item === 'string' ? item : '');
+        const tableName = item.table_name || item.table || '';
+
+        return `
+          <div class="sql-label">File: ${escapeHtml(fileName)}</div>
+          ${tableName ? `<div class="sql-meta">Table: <span class="sql-val">${escapeHtml(tableName)}</span></div>` : ''}
+          <pre class="sql-code">${escapeHtml(sqlText)}</pre>
+        `;
+      }).join('<hr>');
+
+      sqlToggle.addEventListener('click', () => sqlExpander.classList.toggle('hidden'));
+      body.appendChild(sqlExpander);
+    }
   }
 
   row.appendChild(av);
@@ -813,14 +816,8 @@ function hideTyping() {
 function updateFilterBanner() {
   const banner = document.getElementById('filterBanner');
   const fileEl = document.getElementById('filterFile');
-
-  const selected = state.selectedFiles || [];
-
-  if (selected.length === 1) {
-    fileEl.textContent = selected[0];
-    banner.classList.remove('hidden');
-  } else if (selected.length > 1) {
-    fileEl.textContent = `${selected.length} files selected: ${selected.join(', ')}`;
+  if (state.selectedFile) {
+    fileEl.textContent = state.selectedFile;
     banner.classList.remove('hidden');
   } else {
     banner.classList.add('hidden');
@@ -855,13 +852,11 @@ async function sendMessage() {
   if (!q) return;
   if (state.isTyping) { toast('Please wait for the current response…', 'warning'); return; }
 
-  // Block chat if any selected file is not ready yet
-  const selectedForChat = state.selectedFiles || [];
-
-  for (const fname of selectedForChat) {
-    const statusInfo = state.fileStatuses[fname];
+  // Block chat if selected structured file is not ready yet
+  if (state.selectedFile) {
+    const statusInfo = state.fileStatuses[state.selectedFile];
     if (statusInfo && !statusInfo.ready && statusInfo.status !== 'not_found') {
-      toast(`⏳ ${fname} is still processing. ${statusInfo.message || 'Please wait.'}`, 'warning');
+      toast(`⏳ ${state.selectedFile} is still processing. ${statusInfo.message || 'Please wait.'}`, 'warning');
       return;
     }
   }
@@ -884,12 +879,9 @@ async function sendMessage() {
 
   let data = {}, status = 500;
   try {
-    const selectedForChat = state.selectedFiles || [];
-
     const r = await apiPost('/chat', {
       question:     q,
-      file_name:    selectedForChat.length === 1 ? selectedForChat[0] : null,
-      file_names:   selectedForChat.length > 1 ? selectedForChat : null,
+      file_name:    state.selectedFile,
       top_k:        state.topK,
       chat_history: history,
     });
@@ -937,7 +929,7 @@ async function sendMessage() {
   } else {
     addMessage({
       role:'assistant',
-      content: '❌ ' + getApiErrorMessage(data, `Server error (${status})`),
+      content: '❌ ' + (data.detail || data.message || data.error || `Server error (${status})`),
       ts: tsAns,
     });
   }
@@ -1015,13 +1007,13 @@ ingestBtn.addEventListener('click', async () => {
       startStatusPolling(fileName);
     }
   } else {
-      const message = getApiErrorMessage(data, 'Upload failed');
+    const message = getApiErrorMessage(data, 'Upload failed');
 
-      if (message.toLowerCase().includes('duplicate')) {
-          toast(message, 'warning');
-      } else {
-          toast('Upload failed: ' + message, 'error');
-      }
+    if (message.toLowerCase().includes('duplicate')) {
+      toast(message, 'warning');
+    } else {
+      toast('Upload failed: ' + message, 'error');
+    }
   }
 });
 
@@ -1054,9 +1046,8 @@ document.getElementById('confirmDelete').addEventListener('click', async () => {
   const { status, data } = await apiDelete(`/files/${encodeURIComponent(name)}`);
   showProgress(false);
   if (status === 200) {
-    if ((state.selectedFiles || []).includes(name)) {
-      state.selectedFiles = state.selectedFiles.filter(f => f !== name);
-      state.selectedFile = state.selectedFiles.length === 1 ? state.selectedFiles[0] : null;
+    if (state.selectedFile === name) {
+      state.selectedFile = null;
       updateFilterBanner();
       clearChat();
     }
@@ -1108,7 +1099,6 @@ document.getElementById('dbtBtn').addEventListener('click', async () => {
 ───────────────────────────────────────────────────────────── */
 document.getElementById('filterClear').addEventListener('click', () => {
   state.selectedFile = null;
-  state.selectedFiles = [];
   updateFilterBanner();
   clearChat();
   loadFiles().then(() => loadHistory(null));
@@ -1200,7 +1190,7 @@ document.getElementById('loginForm').addEventListener('submit', async e => {
     state.user  = data.user || data.user_info || { email, name: email.split('@')[0] };
     await enterApp();
   } else {
-    errEl.textContent = getApiErrorMessage(data, 'Login failed.');
+    errEl.textContent = data.detail || data.message || data.error || 'Login failed.';
     errEl.classList.add('show');
   }
 });
@@ -1240,7 +1230,7 @@ document.getElementById('registerForm').addEventListener('submit', async e => {
     state.user  = data.user || data.user_info || { email, name };
     await enterApp();
   } else {
-    errEl.textContent = getApiErrorMessage(data, 'Registration failed.');
+    errEl.textContent = data.detail || data.message || data.error || 'Registration failed.';
     errEl.classList.add('show');
   }
 });
