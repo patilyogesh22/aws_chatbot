@@ -214,6 +214,11 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
             "per_file": [],
             "chunks": [],
             "chunks_used": 0,
+            "sql": [],
+            "table_name": [],
+            "rows": [],
+            "columns": [],
+            "row_count": 0,
         }
 
     structured_files = [f for f, t in file_types.items() if t == "structured"]
@@ -222,6 +227,7 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
     per_file_answers = []
     all_chunks = []
 
+    # Structured files: query one by one
     for file_name in structured_files:
         try:
             structured_response = answer_structured_question(
@@ -257,6 +263,7 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
                 "row_count": 0,
             })
 
+    # Unstructured files: RAG search across selected unstructured files
     if unstructured_files:
         chunks = retrieve(
             req.question,
@@ -319,7 +326,8 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
         if item.get("table_name")
     ]
 
-    multi_rows = [
+    # Save detailed per-file result data in DB only
+    history_rows = [
         {
             "file_name": item.get("file_name") or ", ".join(item.get("file_names", [])),
             "rows": item.get("rows", []),
@@ -328,7 +336,7 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
         if item.get("rows")
     ]
 
-    multi_columns = [
+    history_columns = [
         {
             "file_name": item.get("file_name") or ", ".join(item.get("file_names", [])),
             "columns": item.get("columns", []),
@@ -348,12 +356,15 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
         file_type="multi",
         generated_sql=json.dumps(multi_sql),
         table_name=json.dumps(multi_tables),
-        rows=multi_rows,
-        columns=multi_columns,
+        rows=history_rows,
+        columns=history_columns,
         row_count=total_row_count,
         chat_type="multi",
     )
 
+    # Important:
+    # For multi-file response, do not return nested rows/columns to frontend.
+    # Otherwise app.js displays [Object Object].
     return {
         "answer": final_answer,
         "per_file": per_file_answers,
@@ -363,8 +374,8 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
         "file_type": "multi",
         "sql": multi_sql,
         "table_name": multi_tables,
-        "rows": multi_rows,
-        "columns": multi_columns,
+        "rows": [],
+        "columns": [],
         "row_count": total_row_count,
         "model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
     }
