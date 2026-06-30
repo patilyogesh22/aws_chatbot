@@ -33,6 +33,7 @@ let state = {
   topK:            5,
   theme:           'dark',
   pendingFile:     null,
+  pendingFiles:    [],
   isTyping:        false,
   fileStatuses:    {},   // { fileName: { status, ready, message, row_count } }
   statusPollers:   {},   // { fileName: intervalId }
@@ -371,7 +372,7 @@ function forceLogout(reason) {
   stopAllPolling();
   state = { token:null, user:null, messages:[], selectedFile:null,
             selectedFiles: [],
-            pendingFile:null, isTyping:false, showChunks: state.showChunks,
+            pendingFile:null, pendingFiles:[], isTyping:false, showChunks: state.showChunks,
             topK: state.topK, theme: state.theme,
             fileStatuses: {}, statusPollers: {} };
   document.getElementById('appShell').classList.add('hidden');
@@ -1053,71 +1054,117 @@ uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag
 uploadZone.addEventListener('drop', e => {
   e.preventDefault();
   uploadZone.classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
-  if (file) setFile(file);
+  const files = Array.from(e.dataTransfer.files || []);
+  if (files.length) setFiles(files);
 });
 uploadInput.addEventListener('change', () => {
-  if (uploadInput.files[0]) setFile(uploadInput.files[0]);
+  const files = Array.from(uploadInput.files || []);
+  if (files.length) setFiles(files);
 });
 
-function setFile(file) {
-  state.pendingFile = file;
-  uploadName.textContent = `${file.name} · ${fmtSize(file.size)}`;
+function setFiles(files) {
+  state.pendingFiles = files;
+  state.pendingFile = files.length === 1 ? files[0] : null;
+
+  if (files.length === 1) {
+    uploadName.textContent = `${files[0].name} · ${fmtSize(files[0].size)}`;
+  } else {
+    const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
+    uploadName.textContent = `${files.length} files selected · ${fmtSize(totalSize)}`;
+  }
+
   uploadPending.classList.remove('hidden');
 }
 
+function setFile(file) {
+  setFiles([file]);
+}
+
 ingestBtn.addEventListener('click', async () => {
-  if (!state.pendingFile) return;
+  const files = state.pendingFiles || [];
+  if (!files.length) return;
+
   const formData = new FormData();
-  formData.append('file', state.pendingFile);
+  const isBatch = files.length > 1;
+
+  if (isBatch) {
+    files.forEach(file => formData.append('files', file));
+  } else {
+    formData.append('file', files[0]);
+  }
+
   showProgress(true);
   ingestBtn.disabled = true;
-  const { data, status } = await apiPost('/upload', formData, true);
+
+  const { data, status } = await apiPost(isBatch ? '/upload/batch' : '/upload', formData, true);
+
   showProgress(false);
   ingestBtn.disabled = false;
-  if (status === 200) {
-    const chunks    = data.chunks ?? 0;
-    const fileName  = data.file || state.pendingFile.name;
-    const isStruct  = data.file_type === 'structured';
 
-    if (isStruct) {
-      toast(`📤 ${fileName} uploaded! AWS Glue is processing (1–3 min)…`, 'info');
-      // Set initial pending status immediately
-      state.fileStatuses[fileName] = {
-        status: 'glue_job_pending',
-        ready: false,
-        message: 'File uploaded. Waiting for AWS Glue to start…',
-        row_count: null,
-      };
+  if (status === 200) {
+    const results = isBatch ? (data.results || []) : [data];
+
+    let successCount = 0;
+    let duplicateCount = 0;
+    let errorCount = 0;
+
+    results.forEach(result => {
+      const resultStatus = result.status;
+      const fileName = result.file || 'Unknown file';
+
+      if (resultStatus === 'success') {
+        successCount += 1;
+        const isStruct = result.file_type === 'structured';
+
+        state.fileStatuses[fileName] = {
+          status: 'sqs_queued',
+          ready: false,
+          message: isStruct
+            ? 'Structured file queued for Glue processing…'
+            : 'File queued for ECS background processing…',
+          row_count: null,
+        };
+
+        startStatusPolling(fileName);
+      } else if (resultStatus === 'duplicate') {
+        duplicateCount += 1;
+      } else if (resultStatus === 'retry_required') {
+        errorCount += 1;
+      } else {
+        errorCount += 1;
+      }
+    });
+
+    if (isBatch) {
+      toast(`📤 Batch upload finished: ${successCount} queued, ${duplicateCount} duplicate, ${errorCount} failed/retry.`, errorCount ? 'warning' : 'success');
     } else {
-      toast(`📤 ${fileName} uploaded and queued for background processing…`, 'info');
-      state.fileStatuses[fileName] = {
-        status: 'sqs_queued',
-        ready: false,
-        message: 'File queued for ECS background processing…',
-        row_count: null,
-      };
-      startStatusPolling(fileName);
+      const result = results[0] || {};
+      const fileName = result.file || files[0].name;
+
+      if (result.status === 'success') {
+        toast(`📤 ${fileName} uploaded and queued for background processing…`, 'info');
+      } else if (result.status === 'duplicate') {
+        toast(result.message || 'Duplicate file already uploaded by this user', 'warning');
+      } else {
+        toast(result.message || 'Upload failed', 'error');
+      }
     }
 
     state.pendingFile = null;
+    state.pendingFiles = [];
     uploadPending.classList.add('hidden');
     uploadInput.value = '';
+
     await loadFiles();
     await loadHealthStats();
-
-    // Start polling immediately for structured files
-    if (isStruct) {
-      startStatusPolling(fileName);
-    }
   } else {
-      const message = getApiErrorMessage(data, 'Upload failed');
+    const message = getApiErrorMessage(data, 'Upload failed');
 
-      if (message.toLowerCase().includes('duplicate')) {
-          toast(message, 'warning');
-      } else {
-          toast('Upload failed: ' + message, 'error');
-      }
+    if (message.toLowerCase().includes('duplicate')) {
+      toast(message, 'warning');
+    } else {
+      toast('Upload failed: ' + message, 'error');
+    }
   }
 });
 
