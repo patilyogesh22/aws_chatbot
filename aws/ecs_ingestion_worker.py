@@ -56,10 +56,21 @@ def mark_status(status: str, error: str | None = None):
                 DOCUMENT_ID,
                 USER_ID,
             ))
+
+            cur.execute("""
+                UPDATE file_upload_events
+                SET status = %s
+                WHERE document_id = %s
+                  AND user_id = %s
+            """, (
+                status,
+                DOCUMENT_ID,
+                USER_ID,
+            ))
+
         conn.commit()
 
     print(f"[worker] Status changed to {status}")
-
 
 def create_dbt_profile():
     profile_dir = Path("/root/.dbt")

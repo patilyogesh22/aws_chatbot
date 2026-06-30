@@ -39,7 +39,6 @@ class StructuredReadyRequest(BaseModel):
     table_name: str
     status: str = "ready"
 
-
 @router.post("/internal/structured/mark-ready")
 def mark_structured_ready(
     req: StructuredReadyRequest,
@@ -53,10 +52,24 @@ def mark_structured_ready(
 
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
+            # 1. Mark app document ready
+            cur.execute("""
+                UPDATE app_documents
+                SET processing_status = %s,
+                    processing_error = NULL,
+                    updated_at = NOW()
+                WHERE user_id = %s
+                  AND id = %s
+            """, (
+                req.status,
+                req.user_id,
+                req.document_id,
+            ))
+
+            # 2. Mark structured dataset ready
             cur.execute("""
                 UPDATE structured_datasets
-                SET
-                    status = %s,
+                SET status = %s,
                     table_name = %s,
                     updated_at = NOW()
                 WHERE user_id = %s
@@ -64,6 +77,18 @@ def mark_structured_ready(
             """, (
                 req.status,
                 req.table_name,
+                req.user_id,
+                req.document_id,
+            ))
+
+            # 3. Mark upload event ready
+            cur.execute("""
+                UPDATE file_upload_events
+                SET status = %s
+                WHERE user_id = %s
+                  AND document_id = %s
+            """, (
+                req.status,
                 req.user_id,
                 req.document_id,
             ))
@@ -76,4 +101,9 @@ def mark_structured_ready(
         "document_id": req.document_id,
         "table_name": req.table_name,
         "new_status": req.status,
+        "updated_tables": [
+            "app_documents",
+            "structured_datasets",
+            "file_upload_events"
+        ],
     }
