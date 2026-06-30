@@ -610,7 +610,7 @@ async function loadHistory(fileName) {
         content: cleanAnswer,
         ts,
 
-        sources: item.file_name ? [item.file_name] : [],
+        sources: item.file_name ? [item.file_name] : (item.file_names || []),
         chunks: [],
         model: item.model || '',
 
@@ -621,6 +621,7 @@ async function loadHistory(fileName) {
 
         rows,
         columns,
+        multi_results: item.multi_results || item.result_rows || [],
       });
     }
   }
@@ -669,7 +670,13 @@ function formatVal(v) {
 }
 
 function isStructuredMsg(msg) {
-  return msg.role === 'assistant' && (msg.file_type === 'structured' || msg.sql || msg.rows?.length);
+  return msg.role === 'assistant' && (
+    msg.file_type === 'structured' ||
+    msg.file_type === 'multi' ||
+    msg.sql ||
+    msg.rows?.length ||
+    msg.multi_results?.length
+  );
 }
 
 function buildStructuredResult(msg) {
@@ -713,6 +720,44 @@ function buildStructuredResult(msg) {
     </div>
   `;
 }
+
+function buildMultiFileResults(msg) {
+  if (!Array.isArray(msg.multi_results) || !msg.multi_results.length) {
+    return '';
+  }
+
+  return msg.multi_results.map(item => {
+    const fileName = item.file_name || 'Unknown file';
+    const rows = item.rows || [];
+
+    if (!Array.isArray(rows) || !rows.length) return '';
+
+    const columns = Object.keys(rows[0] || {});
+
+    return `
+      <div class="data-card">
+        <div class="data-card-title">📄 ${escapeHtml(fileName)} Results (${rows.length} rows)</div>
+        <div class="data-table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                ${columns.map(c => `<th>${escapeHtml(formatKey(c))}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(r => `
+                <tr>
+                  ${columns.map(c => `<td>${formatVal(r[c])}</td>`).join('')}
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
 function buildMsgEl(msg) {
   const row = document.createElement('div');
   row.className = 'msg-row ' + msg.role;
@@ -738,6 +783,7 @@ function buildMsgEl(msg) {
     bubble.innerHTML = `
       <div class="answer-text">${escapeHtml(msg.content || '').replace(/\n/g, '<br>')}</div>
       ${buildStructuredResult(msg)}
+      ${buildMultiFileResults(msg)}
     `;
   } else {
     bubble.innerHTML = escapeHtml(msg.content || '').replace(/\n/g, '<br>');
@@ -980,8 +1026,9 @@ async function sendMessage() {
       table_name: data.table_name || null,
       row_count:  data.row_count  ?? null,
       file_type:  data.file_type  || null,
-      rows:       data.rows       || [],
-      columns:    data.columns    || [],
+      rows:          data.rows || [],
+      columns:       data.columns || [],
+      multi_results: data.multi_results || [],
     });
   } else {
     addMessage({

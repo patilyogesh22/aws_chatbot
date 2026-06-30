@@ -161,6 +161,7 @@ def _answer_single_file(req: ChatRequest, user_id: int, file_name: Optional[str]
                     "row_count": 0,
                     "rows": [],
                     "columns": [],
+                    
                 }
 
     chunks = retrieve(
@@ -219,6 +220,7 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
             "rows": [],
             "columns": [],
             "row_count": 0,
+            "multi_results": [],
         }
 
     structured_files = [f for f, t in file_types.items() if t == "structured"]
@@ -374,8 +376,11 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
         "file_type": "multi",
         "sql": multi_sql,
         "table_name": multi_tables,
+        # Keep flat rows/columns empty to avoid [Object Object] table rendering.
+        # Send per-file tables separately through multi_results.
         "rows": [],
         "columns": [],
+        "multi_results": history_rows,
         "row_count": total_row_count,
         "model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
     }
