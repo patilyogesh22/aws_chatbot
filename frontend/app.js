@@ -234,6 +234,36 @@ function getApiErrorMessage(data, fallback = 'Request failed') {
 
   return fallback;
 }
+
+function normalizeSqlList(sql) {
+  if (!sql) return [];
+
+  if (Array.isArray(sql)) {
+    return sql;
+  }
+
+  if (typeof sql === 'string') {
+    try {
+      const parsed = JSON.parse(sql);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+      if (parsed && typeof parsed === 'object') {
+        return [parsed];
+      }
+    } catch(e) {
+      return [{ sql }];
+    }
+
+    return [{ sql }];
+  }
+
+  if (typeof sql === 'object') {
+    return [sql];
+  }
+
+  return [];
+}
 /* ─────────────────────────────────────────────────────────────
    UTILS
 ───────────────────────────────────────────────────────────── */
@@ -749,24 +779,43 @@ function buildMsgEl(msg) {
     body.appendChild(expander);
   }
 
-  // Structured query details (SQL + table + row count)
+  // Structured query details (single SQL or multi-file SQL list)
   if (msg.sql && msg.role === 'assistant') {
-    const sqlToggle = document.createElement('div');
-    sqlToggle.className = 'chunks-toggle';
-    sqlToggle.style.borderColor = 'rgba(34,211,238,0.3)';
-    sqlToggle.innerHTML = '📊 Structured Query Details';
-    body.appendChild(sqlToggle);
+    const sqlList = normalizeSqlList(msg.sql);
 
-    const sqlExpander = document.createElement('div');
-    sqlExpander.className = 'chunks-expander hidden sql-expander';
-    sqlExpander.innerHTML = `
-      <div class="sql-label">SQL Query</div>
-      <pre class="sql-code">${escapeHtml(msg.sql)}</pre>
-      ${msg.table_name ? `<div class="sql-meta">Table: <span class="sql-val">${escapeHtml(msg.table_name)}</span></div>` : ''}
-      ${msg.row_count != null ? `<div class="sql-meta">Rows returned: <span class="sql-val">${msg.row_count}</span></div>` : ''}
-    `;
-    sqlToggle.addEventListener('click', () => sqlExpander.classList.toggle('hidden'));
-    body.appendChild(sqlExpander);
+    if (sqlList.length) {
+      const sqlToggle = document.createElement('div');
+      sqlToggle.className = 'chunks-toggle';
+      sqlToggle.style.borderColor = 'rgba(34,211,238,0.3)';
+      sqlToggle.innerHTML = sqlList.length > 1
+        ? `📊 Structured Query Details (${sqlList.length} files)`
+        : '📊 Structured Query Details';
+      body.appendChild(sqlToggle);
+
+      const sqlExpander = document.createElement('div');
+      sqlExpander.className = 'chunks-expander hidden sql-expander';
+
+      sqlExpander.innerHTML = sqlList.map((item, index) => {
+        const fileName = item.file_name || item.file || `Query ${index + 1}`;
+        const sqlText = item.sql || '';
+        const tableName = item.table_name || item.table || '';
+
+        return `
+          <div class="sql-label">File: ${escapeHtml(fileName)}</div>
+          ${tableName ? `<div class="sql-meta">Table: <span class="sql-val">${escapeHtml(tableName)}</span></div>` : ''}
+          <pre class="sql-code">${escapeHtml(sqlText)}</pre>
+        `;
+      }).join('<hr>');
+
+      if (msg.row_count != null) {
+        sqlExpander.innerHTML += `
+          <div class="sql-meta">Total rows returned: <span class="sql-val">${escapeHtml(String(msg.row_count))}</span></div>
+        `;
+      }
+
+      sqlToggle.addEventListener('click', () => sqlExpander.classList.toggle('hidden'));
+      body.appendChild(sqlExpander);
+    }
   }
 
   row.appendChild(av);
@@ -927,7 +976,7 @@ async function sendMessage() {
       model:      data.model || data.model_used || '',
       sources:    data.sources    || [],
       chunks:     data.chunks     || [],
-      sql:        data.sql        || null,
+      sql:        data.sql        || data.generated_sql || null,
       table_name: data.table_name || null,
       row_count:  data.row_count  ?? null,
       file_type:  data.file_type  || null,
