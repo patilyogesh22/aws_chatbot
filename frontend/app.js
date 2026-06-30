@@ -15,11 +15,11 @@
      GET  /structured/status/{file_name} → { status, ready, message, row_count }
 ═══════════════════════════════════════════════════════════════ */
 
-const API_URL = window.__API_URL__ || '/api';
-// const API_URL =
-//   location.hostname === "localhost" || location.hostname === "127.0.0.1"
-//     ? "http://localhost:8000"
-//     : "/api";
+// const API_URL = window.__API_URL__ || '/api';
+const API_URL =
+  location.hostname === "localhost" || location.hostname === "127.0.0.1"
+    ? "http://localhost:8000"
+    : "/api";
 /* ─────────────────────────────────────────────────────────────
    STATE
 ───────────────────────────────────────────────────────────── */
@@ -488,6 +488,10 @@ function renderFiles(files) {
           <span class="fc-icon">${extIcon(f.name)}</span>
           <span class="fc-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
           <span class="fc-badge ${badgeCls}">${badgeTxt}</span>
+          ${['error', 'sqs_failed'].includes(rawStatus)
+            ? `<button class="fc-retry" data-retry="${f.document_id}" title="Retry processing">↻</button>`
+            : ''
+          }
           <button class="fc-delete" data-del="${escapeHtml(f.name)}" title="Remove file">🗑</button>
         </div>
         ${statusBadge}
@@ -503,7 +507,7 @@ function renderFiles(files) {
   // Checkbox click → multi-select
   container.querySelectorAll('.file-card').forEach(card => {
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.fc-delete')) return; // handled separately
+      if (e.target.closest('.fc-delete') || e.target.closest('.fc-retry')) return;
 
       const name = card.dataset.name;
 
@@ -569,6 +573,31 @@ function renderFiles(files) {
       showConfirmDelete(btn.dataset.del);
     });
   });
+  container.querySelectorAll('.fc-retry').forEach(btn => {
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+
+    const documentId = btn.dataset.retry;
+
+    if (!documentId) {
+      toast('Cannot retry: document id missing', 'error');
+      return;
+    }
+
+    showProgress(true);
+
+    const { data, status } = await apiPost(`/upload/${documentId}/retry-queue`, {});
+
+    showProgress(false);
+
+    if (status === 200) {
+      toast('File sent for retry successfully.', 'success');
+      await loadFiles();
+    } else {
+      toast('Retry failed: ' + getApiErrorMessage(data, 'Unknown error'), 'error');
+    }
+  });
+});
 }
 
 /* ─────────────────────────────────────────────────────────────

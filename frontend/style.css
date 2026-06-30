@@ -2729,3 +2729,15 @@ textarea::placeholder {
   90%  { width: 95%; opacity: 0.6; }
   100% { width: 0%;  opacity: 0; }
 }
+.fc-retry {
+  border: none;
+  background: rgba(34, 211, 238, 0.12);
+  color: #22d3ee;
+  border-radius: 8px;
+  padding: 4px 7px;
+  cursor: pointer;
+}
+
+.fc-retry:hover {
+  background: rgba(34, 211, 238, 0.22);
+}
