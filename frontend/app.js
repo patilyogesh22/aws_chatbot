@@ -1279,5 +1279,6 @@ document.getElementById('registerForm').addEventListener('submit', async e => {
       el.addEventListener('pointerdown', () => el.classList.add('pressing'));
       ['pointerup','pointerleave','blur'].forEach(ev => el.addEventListener(ev, () => el.classList.remove('pressing')));
     });
+    
   });
 })();
