@@ -15,11 +15,11 @@
      GET  /structured/status/{file_name} → { status, ready, message, row_count }
 ═══════════════════════════════════════════════════════════════ */
 
-// const API_URL = window.__API_URL__ || '/api';
-const API_URL =
-  location.hostname === "localhost" || location.hostname === "127.0.0.1"
-    ? "http://localhost:8000"
-    : "/api";
+const API_URL = window.__API_URL__ || '/api';
+// const API_URL =
+//   location.hostname === "localhost" || location.hostname === "127.0.0.1"
+//     ? "http://localhost:8000"
+//     : "/api";
 /* ─────────────────────────────────────────────────────────────
    STATE
 ───────────────────────────────────────────────────────────── */
