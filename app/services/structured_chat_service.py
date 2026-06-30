@@ -11,6 +11,8 @@ Fixes:
 """
 
 import json
+import hashlib
+import time
 import re
 from decimal import Decimal
 from typing import Dict, List, Optional
@@ -288,6 +290,7 @@ def answer_column_list(schema: List[Dict], table_name: str, file_name: str) -> D
         "rows": [],
         "columns": columns,
         "row_count": len(columns),
+        "execution_time_ms": None,
         "file_type": "structured",
         "sources": [file_name],
         "chunks": [],
@@ -341,6 +344,13 @@ Hard rules:
 20. If user asks "all details", SELECT only user-visible columns, not system columns.
 21. If a column can contain NULL values, avoid returning NULL as the best/highest/lowest answer unless the user specifically asks for NULLs.
 22. Prefer accurate SQL over short SQL.
+23. For "top N per group" questions, such as "top 3 employees in each department":
+    - Use a CTE or subquery.
+    - Use ROW_NUMBER() or DENSE_RANK() OVER (PARTITION BY group_column ORDER BY metric_column DESC).
+    - Filter rank <= N in the outer query.
+    - Never use only ORDER BY + LIMIT for "top N per department/category/city/group".
+24. If the user says "each", "per", "by department", "by category", "by city", or "group wise", use GROUP BY or PARTITION BY.
+25. Do not use LIMIT for top N per group except final safety LIMIT if needed.
 """
 
     user_prompt = f"""
@@ -398,6 +408,9 @@ Rules:
 6. If error is due to numeric text, use CAST(REPLACE(column, ',', '') AS NUMERIC).
 7. If error is due to duplicate LIMIT, use only one LIMIT.
 8. If highest/top query returned NULL risk, add column IS NOT NULL and NULLS LAST.
+9. For "top N per group" questions, use a CTE/subquery with ROW_NUMBER() or DENSE_RANK()
+   OVER (PARTITION BY group_column ORDER BY metric_column DESC), then filter rank <= N.
+10. Never use only ORDER BY + LIMIT for "top N per department/category/city/group".
 """
 
     user_prompt = f"""
@@ -512,11 +525,15 @@ def enforce_limit(sql: str) -> str:
 def run_sql(sql: str) -> Dict:
     final_sql = enforce_limit(sql)
 
+    start_time = time.time()
+
     with psycopg2.connect(PG_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute(final_sql)
             columns = [desc[0] for desc in cur.description]
             rows = cur.fetchall()
+
+    execution_time_ms = round((time.time() - start_time) * 1000, 2)
 
     result_rows = []
 
@@ -533,6 +550,7 @@ def run_sql(sql: str) -> Dict:
         "columns": columns,
         "rows": result_rows,
         "row_count": len(result_rows),
+        "execution_time_ms": execution_time_ms,
     }
 
 
@@ -657,6 +675,7 @@ def answer_structured_question(
         "rows": result["rows"][:30],
         "columns": result["columns"],
         "row_count": result["row_count"],
+        "execution_time_ms": result.get("execution_time_ms"),
         "file_type": "structured",
         "sources": [file_name],
         "chunks": [],
