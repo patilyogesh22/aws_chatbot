@@ -155,7 +155,13 @@ def main():
 
         print(f"[worker] Chunks created: {len(chunks)}")
 
-        run_dbt()
+        should_run_dbt = os.getenv("RUN_DBT", "false").lower() == "true"
+
+        if should_run_dbt:
+            print("[worker] RUN_DBT=true, running dbt...")
+            run_dbt()
+        else:
+            print("[worker] RUN_DBT=false, skipping dbt for this file")
 
         embedded_count = embed_from_postgres(
             user_id=USER_ID,
