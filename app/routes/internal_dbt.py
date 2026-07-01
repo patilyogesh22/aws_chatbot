@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app.config import PG_DSN
+from app.db import get_db_connection
 from app.auth import get_current_user
 from app.services.dbt_service import run_dbt_build
 
@@ -50,7 +51,7 @@ def mark_structured_ready(
     if x_internal_api_key != INTERNAL_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid internal API key")
 
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             # 1. Mark app document ready
             cur.execute("""
@@ -93,7 +94,6 @@ def mark_structured_ready(
                 req.document_id,
             ))
 
-        conn.commit()
 
     return {
         "status": "updated",

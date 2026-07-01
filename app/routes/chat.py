@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import PG_DSN
+from app.db import get_db_connection
 from app.auth import get_current_user
 from app.services.rag_service import retrieve, build_context
 from app.services.llm_service import answer, synthesise_multi_file_answer
@@ -47,7 +48,7 @@ def _get_selected_file_types(user_id: int, file_names: list[str]) -> dict[str, s
     if not file_names:
         return {}
 
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT file_name, file_type
@@ -79,7 +80,7 @@ def _save_chat_history(
     row_count: int | None = None,
     chat_type: str = "single",
 ):
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO chat_history
@@ -113,7 +114,6 @@ def _save_chat_history(
                 row_count,
             ))
 
-        conn.commit()
 
 
 def _answer_single_file(req: ChatRequest, user_id: int, file_name: Optional[str]):

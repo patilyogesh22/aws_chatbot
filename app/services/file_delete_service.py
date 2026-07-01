@@ -2,6 +2,7 @@ import re
 import psycopg2
 
 from app.config import PG_DSN
+from app.db import get_db_connection
 from aws.s3_ingestion import delete_s3_object
 from app.services.ingestion_service import delete_file_chunks
 from app.services.embedding_service import delete_file_embeddings
@@ -20,7 +21,7 @@ def safe_drop_table(cur, table_name: str) -> bool:
 
 
 def delete_user_file(user_id: int, file_name: str):
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, file_type, s3_key
@@ -40,7 +41,7 @@ def delete_user_file(user_id: int, file_name: str):
     structured_table_rows = []
 
     if file_type == "structured":
-        with psycopg2.connect(PG_DSN) as conn:
+        with get_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT table_name
@@ -86,7 +87,7 @@ def delete_user_file(user_id: int, file_name: str):
     except Exception as e:
         deleted["document_embeddings"] = f"error: {e}"
 
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 DELETE FROM raw_chunks
@@ -154,7 +155,6 @@ def delete_user_file(user_id: int, file_name: str):
             """, (user_id, document_id))
             deleted["app_documents"] = cur.rowcount
 
-        conn.commit()
 
     return {
         "status": "deleted",

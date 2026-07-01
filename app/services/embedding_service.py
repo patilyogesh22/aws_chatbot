@@ -17,6 +17,7 @@ from app.config import (
     PG_DSN,
     EMBEDDING_MODEL,
 )
+from app.db import get_db_connection
 _pgvector_initialized = False
 _model: SentenceTransformer = None
 
@@ -40,9 +41,7 @@ def init_pgvector():
     if _pgvector_initialized:
         return
 
-    conn = psycopg2.connect(PG_DSN)
-
-    try:
+    with get_db_connection() as conn:
         register_vector(conn)
 
         with conn.cursor() as cur:
@@ -75,19 +74,15 @@ def init_pgvector():
             """)
 
             cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_document_embeddings_vector
+                
+                CREATE INDEX IF NOT EXISTS idx_document_embeddings_vector_hnsw
                 ON document_embeddings
-                USING ivfflat (embedding vector_cosine_ops)
-                WITH (lists = 100);
+                USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64);
             """)
-
-        conn.commit()
 
         _pgvector_initialized = True
         print("[embeddings] pgvector initialized")
-
-    finally:
-        conn.close()
 def _fetch_chunks_from_pg(
     user_id: int,
     file_name: Optional[str] = None,
@@ -99,9 +94,7 @@ def _fetch_chunks_from_pg(
     If dbt mart is not available, falls back to raw_chunks.
     """
 
-    conn = psycopg2.connect(PG_DSN)
-
-    try:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             for table in ("mart_processed_chunks", "raw_chunks"):
                 try:
@@ -165,9 +158,6 @@ def _fetch_chunks_from_pg(
 
         return []
 
-    finally:
-        conn.close()
-
 
 def embed_and_store(chunks: List[Dict]) -> int:
     """
@@ -186,9 +176,7 @@ def embed_and_store(chunks: List[Dict]) -> int:
     print(f"[embeddings] Generating embeddings for {len(texts)} chunks...")
     embeddings = model.encode(texts, show_progress_bar=True).tolist()
 
-    conn = psycopg2.connect(PG_DSN)
-
-    try:
+    with get_db_connection() as conn:
         register_vector(conn)
 
         inserted = 0
@@ -232,13 +220,8 @@ def embed_and_store(chunks: List[Dict]) -> int:
 
                 inserted += 1
 
-        conn.commit()
-
         print(f"[embeddings] Stored {inserted} vectors in PostgreSQL pgvector")
         return inserted
-
-    finally:
-        conn.close()
 
 
 def embed_from_postgres(
@@ -264,9 +247,7 @@ def delete_file_embeddings(user_id: int, file_name: str):
 
     init_pgvector()
 
-    conn = psycopg2.connect(PG_DSN)
-
-    try:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 DELETE FROM document_embeddings
@@ -279,23 +260,16 @@ def delete_file_embeddings(user_id: int, file_name: str):
 
             deleted = cur.rowcount
 
-        conn.commit()
-
         print(
             f"[embeddings] Deleted {deleted} vectors "
             f"for user={user_id}, file='{file_name}'"
         )
 
-    finally:
-        conn.close()
-
 
 def collection_stats(user_id: int = None) -> Dict:
     init_pgvector()
 
-    conn = psycopg2.connect(PG_DSN)
-
-    try:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             if user_id:
                 cur.execute("""
@@ -314,6 +288,3 @@ def collection_stats(user_id: int = None) -> Dict:
         return {
             "total_vectors": total_vectors
         }
-
-    finally:
-        conn.close()

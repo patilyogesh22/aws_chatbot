@@ -3,6 +3,7 @@ import psycopg2
 from fastapi import APIRouter, Depends
 
 from app.config import PG_DSN
+from app.db import get_db_connection
 from app.auth import get_current_user
 from app.services.embedding_service import collection_stats
 
@@ -14,7 +15,7 @@ def stats(current_user: dict = Depends(get_current_user)):
     base = collection_stats(user_id=current_user["id"])
 
     try:
-        with psycopg2.connect(PG_DSN) as conn:
+        with get_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT COUNT(*)

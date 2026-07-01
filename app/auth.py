@@ -1,7 +1,6 @@
 import os
 from datetime import datetime, timedelta
 
-import psycopg2
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt, JWTError
@@ -9,6 +8,7 @@ from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 
 from app.config import PG_DSN
+from app.db import get_db_connection
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -33,7 +33,7 @@ class LoginRequest(BaseModel):
 
 
 def get_conn():
-    return psycopg2.connect(PG_DSN)
+    return get_db_connection()
 
 
 def init_auth_tables():

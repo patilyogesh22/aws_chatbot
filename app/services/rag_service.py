@@ -19,6 +19,7 @@ from app.config import (
     EMBEDDING_MODEL,
     TOP_K,
 )
+from app.db import get_db_connection
 
 _model: SentenceTransformer = None
 
@@ -67,7 +68,8 @@ def retrieve(
     if file_name and not clean_file_names:
         clean_file_names = [file_name]
 
-    conn = psycopg2.connect(PG_DSN)
+    conn_cm = get_db_connection()
+    conn = conn_cm.__enter__()
 
     try:
         register_vector(conn)
@@ -148,7 +150,7 @@ def retrieve(
         ]
 
     finally:
-        conn.close()
+        conn_cm.__exit__(None, None, None)
 
 
 def build_context(chunks: List[Dict]) -> str:

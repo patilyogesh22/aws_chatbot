@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 
 from app.config import PG_DSN
+from app.db import get_db_connection
 from app.auth import get_current_user
 
 router = APIRouter()
@@ -14,7 +15,7 @@ def get_history(
     file_name: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             if file_name:
                 cur.execute("""

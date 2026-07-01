@@ -6,6 +6,7 @@ import psycopg2
 from fastapi import APIRouter, File, UploadFile, HTTPException, Depends
 
 from app.config import PG_DSN
+from app.db import get_db_connection
 from app.auth import get_current_user
 from app.utils.file_classifier import classify_file
 from app.utils.structured_converter import convert_excel_to_csv
@@ -28,7 +29,7 @@ def update_processing_status(
     event_status: str | None = None,
     error: str | None = None,
 ):
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             if document_status:
                 cur.execute("""
@@ -70,7 +71,6 @@ def update_processing_status(
                     document_id,
                 ))
 
-        conn.commit()
 
 
 def insert_file_upload_event(
@@ -83,7 +83,7 @@ def insert_file_upload_event(
     document_id: int,
     status: str,
 ):
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO file_upload_events
@@ -106,11 +106,10 @@ def insert_file_upload_event(
                 document_id,
                 status,
             ))
-        conn.commit()
 
 
 def get_duplicate_file(*, user_id: int, file_hash: str):
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
@@ -266,7 +265,7 @@ def _process_upload_content(
     if file_type == "unknown":
         raise HTTPException(status_code=400, detail="Unsupported file type after upload")
 
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO app_documents
@@ -293,7 +292,6 @@ def _process_upload_content(
 
             document_id = cur.fetchone()[0]
 
-        conn.commit()
 
     insert_file_upload_event(
         user_id=user_id,
@@ -306,7 +304,7 @@ def _process_upload_content(
     )
 
     if file_type == "structured":
-        with psycopg2.connect(PG_DSN) as conn:
+        with get_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO structured_datasets
@@ -332,7 +330,6 @@ def _process_upload_content(
                     "upload_saved",
                 ))
 
-            conn.commit()
 
     try:
         sqs_message_id = send_file_to_queue(
@@ -502,7 +499,7 @@ async def retry_queue_document(
         if not s3_bucket:
             raise HTTPException(status_code=500, detail="S3_BUCKET not set")
 
-        with psycopg2.connect(PG_DSN) as conn:
+        with get_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT

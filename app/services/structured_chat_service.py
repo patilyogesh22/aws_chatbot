@@ -18,13 +18,12 @@ from decimal import Decimal
 from typing import Dict, List, Optional
 from datetime import date, datetime
 import psycopg2
-from groq import Groq
+from app.db import get_db_connection
 
 from app.config import PG_DSN, GROQ_API_KEY, GROQ_MODEL
 from app.services.ai_fallback_service import call_ai_with_fallback
 
 
-client = Groq(api_key=GROQ_API_KEY)
 
 SYSTEM_COLUMNS = {
     "user_id",
@@ -91,7 +90,7 @@ def make_question_hash(question: str) -> str:
 def get_cached_answer(user_id: int, document_id: int, file_name: str, question: str):
     question_hash = make_question_hash(question)
 
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT generated_sql, answer, result_rows, result_columns, row_count, execution_time_ms
@@ -147,7 +146,7 @@ def save_cached_answer(
 ):
     question_hash = make_question_hash(question)
 
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO query_cache
@@ -209,7 +208,7 @@ def get_structured_table(user_id: int, file_name: str) -> Dict:
 
     So two users can upload the same file name without sharing one table.
     """
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
@@ -274,7 +273,7 @@ def get_table_schema(table_name: str) -> List[Dict]:
     """
     Read schema from PostgreSQL and mark internal Glue columns.
     """
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT column_name, data_type
@@ -323,41 +322,29 @@ def get_visible_schema(schema: List[Dict]) -> List[Dict]:
     return [c for c in schema if not c.get("is_system") and c["column_name"] not in SYSTEM_COLUMNS]
 
 
-def get_column_samples(
-    table_name: str,
-    schema: List[Dict],
-    user_id: int,
-    document_id: int,
-) -> Dict[str, List]:
-    """
-    Fetch distinct sample values for each visible column.
-    Filters by user_id + document_id for strong isolation.
-    """
-    samples = {}
-
-    with psycopg2.connect(PG_DSN) as conn:
+def get_column_samples_batch(table_name: str, schema: List[Dict], user_id: int, document_id: int) -> Dict[str, List]:
+    visible = get_visible_schema(schema)
+    if not visible:
+        return {}
+    
+    # Build one SELECT with all columns
+    col_exprs = ", ".join([
+        f"(SELECT array_agg(DISTINCT {quote_ident(c['column_name'])}) "
+        f"FROM (SELECT {quote_ident(c['column_name'])} FROM {quote_ident(table_name)} "
+        f"WHERE user_id = {user_id} AND document_id = {document_id} "
+        f"AND {quote_ident(c['column_name'])} IS NOT NULL LIMIT 50) s) AS {quote_ident(c['column_name'])}"
+        for c in visible
+    ])
+    
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
-            for col in get_visible_schema(schema):
-                col_name = col["column_name"]
-
-                try:
-                    cur.execute(f"""
-                        SELECT DISTINCT {quote_ident(col_name)}
-                        FROM {quote_ident(table_name)}
-                        WHERE user_id = %s
-                          AND document_id = %s
-                          AND {quote_ident(col_name)} IS NOT NULL
-                        LIMIT 5
-                    """, (user_id, document_id))
-
-                    samples[col_name] = [r[0] for r in cur.fetchall()]
-
-                except Exception:
-                    conn.rollback()
-                    samples[col_name] = []
-
-    return samples
-
+            cur.execute(f"SELECT {col_exprs}")
+            row = cur.fetchone()
+            col_names = [c["column_name"] for c in visible]
+            return {
+                col: (list(vals[:5]) if vals else [])
+                for col, vals in zip(col_names, row or [])
+            }
 
 def normalize_sample_json(sample_json: List[Dict]) -> List[Dict]:
     cleaned = []
@@ -390,7 +377,7 @@ def build_schema_context(schema: List[Dict], samples: Dict[str, List], sample_ro
 
     if sample_rows:
         lines.append("\nSample rows:")
-        lines.append(json.dumps(sample_rows[:5], default=str, indent=2))
+        lines.append(json.dumps(sample_rows[:3], default=str, indent=2))
 
     return "\n".join(lines)
 
@@ -660,7 +647,7 @@ def run_sql(sql: str) -> Dict:
 
     start_time = time.time()
 
-    with psycopg2.connect(PG_DSN) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(final_sql)
             columns = [desc[0] for desc in cur.description]
@@ -760,7 +747,7 @@ def answer_structured_question(
 
     sample_rows = normalize_sample_json(table_info.get("sample_json") or [])
 
-    samples = get_column_samples(
+    samples = get_column_samples_batch(
         table_name=table_name,
         schema=schema,
         user_id=user_id,
@@ -801,12 +788,15 @@ def answer_structured_question(
 
     final_sql = result["sql"]
 
-    answer_text = summarize_sql_result(
-        question=question,
-        sql=final_sql,
-        result=result,
-        file_name=file_name,
-    )
+    if result["row_count"] == 0:
+        answer_text = f"No records found matching your query in '{file_name}'."
+    else:
+        answer_text = summarize_sql_result(
+            question=question,
+            sql=final_sql,
+            result=result,
+            file_name=file_name,
+        )
 
     save_cached_answer(
         user_id=user_id,
