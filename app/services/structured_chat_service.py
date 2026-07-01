@@ -34,7 +34,8 @@ SYSTEM_COLUMNS = {
 
 MAX_ROWS_RETURNED = 100
 CACHE_TTL_HOURS = 24
-
+SCHEMA_CONTEXT_CACHE = {}
+SCHEMA_CONTEXT_CACHE_TTL_SECONDS = 3600
 def handle_groq_error(e: Exception):
     msg = str(e)
 
@@ -267,6 +268,51 @@ def get_structured_table(user_id: int, file_name: str) -> Dict:
         "row_count": row_count or 0,
     }
 
+def get_schema_context_cached(
+    *,
+    table_name: str,
+    table_info: Dict,
+    user_id: int,
+    document_id: int,
+):
+    cache_key = f"{user_id}:{document_id}:{table_name}"
+    now = time.time()
+
+    cached = SCHEMA_CONTEXT_CACHE.get(cache_key)
+
+    if cached and now - cached["created_at"] < SCHEMA_CONTEXT_CACHE_TTL_SECONDS:
+        print("[schema cache] HIT")
+        return cached["schema"], cached["schema_context"]
+
+    print("[schema cache] MISS")
+
+    schema = schema_from_json(table_info.get("schema_json") or {})
+
+    if not schema:
+        schema = get_table_schema(table_name)
+
+    sample_rows = normalize_sample_json(table_info.get("sample_json") or [])
+
+    samples = get_column_samples_batch(
+        table_name=table_name,
+        schema=schema,
+        user_id=user_id,
+        document_id=document_id,
+    )
+
+    schema_context = build_schema_context(
+        schema=schema,
+        samples=samples,
+        sample_rows=sample_rows,
+    )
+
+    SCHEMA_CONTEXT_CACHE[cache_key] = {
+        "schema": schema,
+        "schema_context": schema_context,
+        "created_at": now,
+    }
+
+    return schema, schema_context
 
 def get_table_schema(table_name: str) -> List[Dict]:
     """
@@ -736,28 +782,15 @@ def answer_structured_question(
         cached["table_name"] = table_name
         return cached
 
-    schema = schema_from_json(table_info.get("schema_json") or {})
-
-    if not schema:
-        schema = get_table_schema(table_name)
-
-    if is_column_list_question(question):
-        return answer_column_list(schema, table_name, file_name)
-
-    sample_rows = normalize_sample_json(table_info.get("sample_json") or [])
-
-    samples = get_column_samples_batch(
+    schema, schema_context = get_schema_context_cached(
         table_name=table_name,
-        schema=schema,
+        table_info=table_info,
         user_id=user_id,
         document_id=document_id,
     )
 
-    schema_context = build_schema_context(
-        schema=schema,
-        samples=samples,
-        sample_rows=sample_rows,
-    )
+    if is_column_list_question(question):
+        return answer_column_list(schema, table_name, file_name)
 
     sql = generate_sql(
         question=question,

@@ -13,7 +13,7 @@ from typing import List, Dict, Optional
 import psycopg2
 from pgvector.psycopg2 import register_vector
 from sentence_transformers import SentenceTransformer
-
+from functools import lru_cache 
 from app.config import (
     PG_DSN,
     EMBEDDING_MODEL,
@@ -33,6 +33,15 @@ def _get_model() -> SentenceTransformer:
 
     return _model
 
+@lru_cache(maxsize=256)
+def _cached_embed(text: str):
+    """
+    Cache query embeddings in memory.
+    Same question = no repeated embedding calculation.
+    """
+    model = _get_model()
+    normalized = text.strip().lower()
+    return tuple(model.encode(normalized).tolist())
 
 def retrieve(
     query: str,
@@ -53,8 +62,7 @@ def retrieve(
     if not query or not query.strip():
         return []
 
-    model = _get_model()
-    query_embedding = model.encode(query).tolist()
+    query_embedding = list(_cached_embed(query))
 
     # Normalize file filters
     clean_file_names = []
