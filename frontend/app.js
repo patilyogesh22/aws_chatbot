@@ -24,6 +24,7 @@ const API_URL = window.__API_URL__ || '/api';
    STATE
 ───────────────────────────────────────────────────────────── */
 let state = {
+  
   token:           null,
   user:            null,
   messages:        [],
