@@ -4,6 +4,7 @@ Groq LLM integration for answering questions using retrieved context.
 """
 from groq import Groq
 from app.config import GROQ_API_KEY, GROQ_MODEL
+from app.services.ai_fallback_service import call_ai_with_fallback
 
 _client: Groq = None
 
@@ -77,18 +78,11 @@ def answer(question: str, context: str,
     )
     messages.append({"role": "user", "content": user_message})
 
-    try:
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=600,
-            stream=False,
-        )
-    except Exception as e:
-        handle_groq_error(e)
-
-    return response.choices[0].message.content.strip()
+    return call_ai_with_fallback(
+        messages=messages,
+        temperature=0.2,
+        max_tokens=600,
+    )
 
 
 def answer_stream(question: str, context: str):
@@ -167,15 +161,8 @@ def synthesise_multi_file_answer(question: str, per_file_answers: list) -> str:
         },
     ]
 
-    try:
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=messages,
-            temperature=0.1,
-            max_tokens=600,
-            stream=False,
-        )
-    except Exception as e:
-        handle_groq_error(e)
-
-    return response.choices[0].message.content.strip()
+    return call_ai_with_fallback(
+        messages=messages,
+        temperature=0.1,
+        max_tokens=600,
+    )

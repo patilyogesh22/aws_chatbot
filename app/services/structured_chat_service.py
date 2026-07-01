@@ -21,6 +21,7 @@ import psycopg2
 from groq import Groq
 
 from app.config import PG_DSN, GROQ_API_KEY, GROQ_MODEL
+from app.services.ai_fallback_service import call_ai_with_fallback
 
 
 client = Groq(api_key=GROQ_API_KEY)
@@ -506,20 +507,16 @@ User question:
 Generate SQL:
 """
 
-    try:
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0,
-            max_tokens=500,
-        )
-    except Exception as e:
-        handle_groq_error(e)
+    content = call_ai_with_fallback(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0,
+        max_tokens=500,
+    )
 
-    return clean_llm_sql(response.choices[0].message.content)
+    return clean_llm_sql(content)
 
 
 def repair_sql(
@@ -575,20 +572,16 @@ PostgreSQL error:
 Corrected SQL:
 """
 
-    try:
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0,
-            max_tokens=500,
-        )
-    except Exception as e:
-        handle_groq_error(e)
+    content = call_ai_with_fallback(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0,
+        max_tokens=500,
+    )
 
-    return clean_llm_sql(response.choices[0].message.content)
+    return clean_llm_sql(content)
 
 
 def validate_sql(sql: str, table_name: str) -> str:
@@ -728,20 +721,14 @@ SQL result:
 Final answer:
 """
 
-    try:
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0,
-            max_tokens=400,
-        )
-    except Exception as e:
-        handle_groq_error(e)
-
-    return response.choices[0].message.content.strip()
+    return call_ai_with_fallback(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0,
+        max_tokens=400,
+    )
 
 
 def answer_structured_question(
