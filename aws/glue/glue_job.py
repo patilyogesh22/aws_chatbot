@@ -1,6 +1,5 @@
 import sys
 import re
-import psycopg2
 
 from awsglue.context import GlueContext
 from awsglue.utils import getResolvedOptions
@@ -50,57 +49,6 @@ def clean_column_name(name):
     name = re.sub(r"_+", "_", name)
     return name.strip("_") or "column"
 
-
-def create_table_indexes(df_columns):
-    print("Creating PostgreSQL indexes...")
-
-    conn = psycopg2.connect(
-        host=pg_host,
-        port=pg_port,
-        dbname=pg_db,
-        user=pg_user,
-        password=pg_password,
-    )
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                CREATE INDEX IF NOT EXISTS idx_{table_name}_user_doc
-                ON {table_name}(user_id, document_id)
-            """)
-
-            important_columns = {
-                "department",
-                "employee_id",
-                "customer_id",
-                "product_id",
-                "order_id",
-                "city",
-                "state",
-                "category",
-                "date",
-                "join_date",
-                "salary",
-                "age",
-                "gender",
-            }
-
-            for c in df_columns:
-                if c in important_columns:
-                    cur.execute(f"""
-                        CREATE INDEX IF NOT EXISTS idx_{table_name}_{c}
-                        ON {table_name}(user_id, document_id, {c})
-                    """)
-
-        conn.commit()
-        print("Indexes created successfully")
-
-    except Exception as e:
-        print("Index creation failed:", str(e))
-        raise
-
-    finally:
-        conn.close()
 
 
 print("Starting direct S3 to RDS Glue ETL")
@@ -187,7 +135,6 @@ print("Table:", table_name)
     .save()
 )
 
-create_table_indexes(df.columns)
 
 print("Glue ETL completed successfully")
 print("Input:", s3_input_path)
