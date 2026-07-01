@@ -7,6 +7,23 @@ from app.config import GROQ_API_KEY, GROQ_MODEL
 
 _client: Groq = None
 
+def handle_groq_error(e: Exception):
+    msg = str(e)
+
+    if (
+        "rate_limit_exceeded" in msg
+        or "Rate limit reached" in msg
+        or "429" in msg
+        or "tokens per day" in msg
+        or "TPD" in msg
+    ):
+        raise Exception(
+            "AI quota limit reached. Please try again after some time."
+        )
+
+    raise e
+
+
 
 def _get_client() -> Groq:
     global _client
@@ -60,13 +77,16 @@ def answer(question: str, context: str,
     )
     messages.append({"role": "user", "content": user_message})
 
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=messages,
-        temperature=0.2,
-        max_tokens=1024,
-        stream=False,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=600,
+            stream=False,
+        )
+    except Exception as e:
+        handle_groq_error(e)
 
     return response.choices[0].message.content.strip()
 
@@ -86,13 +106,16 @@ def answer_stream(question: str, context: str):
         )},
     ]
 
-    stream = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=messages,
-        temperature=0.2,
-        max_tokens=1024,
-        stream=True,
-    )
+    try:
+        stream = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=600,
+            stream=True,
+        )
+    except Exception as e:
+        handle_groq_error(e)
 
     for chunk in stream:
         delta = chunk.choices[0].delta.content
@@ -144,12 +167,15 @@ def synthesise_multi_file_answer(question: str, per_file_answers: list) -> str:
         },
     ]
 
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=1024,
-        stream=False,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            temperature=0.1,
+            max_tokens=600,
+            stream=False,
+        )
+    except Exception as e:
+        handle_groq_error(e)
 
     return response.choices[0].message.content.strip()

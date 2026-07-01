@@ -33,6 +33,24 @@ SYSTEM_COLUMNS = {
 }
 
 MAX_ROWS_RETURNED = 100
+CACHE_TTL_HOURS = 24
+
+def handle_groq_error(e: Exception):
+    msg = str(e)
+
+    if (
+        "rate_limit_exceeded" in msg
+        or "Rate limit reached" in msg
+        or "429" in msg
+        or "tokens per day" in msg
+        or "TPD" in msg
+    ):
+        raise Exception(
+            "AI quota limit reached. Please try again after some time."
+        )
+
+    raise e
+
 
 
 def quote_ident(name: str) -> str:
@@ -63,6 +81,117 @@ def make_json_safe(value):
         return value.isoformat()
 
     return value
+
+def make_question_hash(question: str) -> str:
+    normalized = re.sub(r"\s+", " ", question.lower().strip())
+    return hashlib.md5(normalized.encode("utf-8")).hexdigest()
+
+
+def get_cached_answer(user_id: int, document_id: int, file_name: str, question: str):
+    question_hash = make_question_hash(question)
+
+    with psycopg2.connect(PG_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT generated_sql, answer, result_rows, result_columns, row_count, execution_time_ms
+                FROM query_cache
+                WHERE user_id = %s
+                  AND document_id = %s
+                  AND file_name = %s
+                  AND question_hash = %s
+                  AND created_at > NOW() - (%s || ' hours')::interval
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (
+                user_id,
+                document_id,
+                file_name,
+                question_hash,
+                CACHE_TTL_HOURS,
+            ))
+
+            row = cur.fetchone()
+
+    if not row:
+        return None
+
+    return {
+        "answer": row[1],
+        "sql": row[0],
+        "table_name": None,
+        "rows": row[2] or [],
+        "columns": row[3] or [],
+        "row_count": row[4] or 0,
+        "execution_time_ms": row[5],
+        "file_type": "structured",
+        "sources": [file_name],
+        "chunks": [],
+        "chunks_used": 0,
+        "from_cache": True,
+    }
+
+
+def save_cached_answer(
+    *,
+    user_id: int,
+    document_id: int,
+    file_name: str,
+    question: str,
+    sql: str,
+    answer: str,
+    rows: list,
+    columns: list,
+    row_count: int,
+    execution_time_ms,
+):
+    question_hash = make_question_hash(question)
+
+    with psycopg2.connect(PG_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO query_cache
+                (
+                    user_id,
+                    document_id,
+                    file_name,
+                    question_hash,
+                    question,
+                    generated_sql,
+                    answer,
+                    result_rows,
+                    result_columns,
+                    row_count,
+                    execution_time_ms,
+                    created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, NOW())
+                ON CONFLICT (user_id, document_id, question_hash)
+                DO UPDATE SET
+                    file_name = EXCLUDED.file_name,
+                    question = EXCLUDED.question,
+                    generated_sql = EXCLUDED.generated_sql,
+                    answer = EXCLUDED.answer,
+                    result_rows = EXCLUDED.result_rows,
+                    result_columns = EXCLUDED.result_columns,
+                    row_count = EXCLUDED.row_count,
+                    execution_time_ms = EXCLUDED.execution_time_ms,
+                    created_at = NOW()
+            """, (
+                user_id,
+                document_id,
+                file_name,
+                question_hash,
+                question,
+                sql,
+                answer,
+                json.dumps(rows or []),
+                json.dumps(columns or []),
+                row_count,
+                execution_time_ms,
+            ))
+
+        conn.commit()
+
 
 def get_structured_table(user_id: int, file_name: str) -> Dict:
     """
@@ -291,6 +420,7 @@ def answer_column_list(schema: List[Dict], table_name: str, file_name: str) -> D
         "columns": columns,
         "row_count": len(columns),
         "execution_time_ms": None,
+        "from_cache": False,
         "file_type": "structured",
         "sources": [file_name],
         "chunks": [],
@@ -372,15 +502,18 @@ User question:
 Generate SQL:
 """
 
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0,
-        max_tokens=900,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0,
+            max_tokens=500,
+        )
+    except Exception as e:
+        handle_groq_error(e)
 
     return clean_llm_sql(response.choices[0].message.content)
 
@@ -438,15 +571,18 @@ PostgreSQL error:
 Corrected SQL:
 """
 
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0,
-        max_tokens=900,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0,
+            max_tokens=500,
+        )
+    except Exception as e:
+        handle_groq_error(e)
 
     return clean_llm_sql(response.choices[0].message.content)
 
@@ -588,15 +724,18 @@ SQL result:
 Final answer:
 """
 
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0,
-        max_tokens=700,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0,
+            max_tokens=400,
+        )
+    except Exception as e:
+        handle_groq_error(e)
 
     return response.choices[0].message.content.strip()
 
@@ -609,6 +748,16 @@ def answer_structured_question(
     table_info = get_structured_table(user_id, file_name)
     table_name = table_info["table_name"]
     document_id = table_info["document_id"]
+    cached = get_cached_answer(
+        user_id=user_id,
+        document_id=document_id,
+        file_name=file_name,
+        question=question,
+    )
+
+    if cached:
+        cached["table_name"] = table_name
+        return cached
 
     schema = schema_from_json(table_info.get("schema_json") or {})
 
@@ -668,6 +817,18 @@ def answer_structured_question(
         file_name=file_name,
     )
 
+    save_cached_answer(
+        user_id=user_id,
+        document_id=document_id,
+        file_name=file_name,
+        question=question,
+        sql=final_sql,
+        answer=answer_text,
+        rows=result["rows"][:30],
+        columns=result["columns"],
+        row_count=result["row_count"],
+        execution_time_ms=result.get("execution_time_ms"),
+    )
     return {
         "answer": answer_text,
         "sql": final_sql,
@@ -676,6 +837,7 @@ def answer_structured_question(
         "columns": result["columns"],
         "row_count": result["row_count"],
         "execution_time_ms": result.get("execution_time_ms"),
+        "from_cache": False,
         "file_type": "structured",
         "sources": [file_name],
         "chunks": [],
