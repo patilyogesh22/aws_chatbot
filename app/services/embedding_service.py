@@ -132,6 +132,10 @@ def _fetch_chunks_from_pg(
 
                     rows = cur.fetchall()
 
+                    if not rows:
+                        print(f"[embeddings] No chunks found in {table}, trying next table...")
+                        continue
+
                     print(f"[embeddings] Reading from table: {table}")
 
                     return [
