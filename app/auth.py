@@ -68,7 +68,6 @@ def init_auth_tables():
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
-        conn.commit()
 
 
 def hash_password(password: str):
@@ -135,7 +134,6 @@ def register(req: RegisterRequest):
             ))
 
             user_id = cur.fetchone()[0]
-        conn.commit()
 
     return {
         "access_token": create_token(user_id, req.email),

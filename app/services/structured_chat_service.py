@@ -194,8 +194,7 @@ def save_cached_answer(
         print("document_id:", document_id)
         print("file_name:", file_name)
         print("question:", question)
-        conn.commit()
-        print("[cache] Saved successfully")
+    print("[cache] Saved successfully")
 
 def get_structured_table(user_id: int, file_name: str) -> Dict:
     """
