@@ -7,7 +7,7 @@ from pyspark.context import SparkContext
 from pyspark.sql.functions import col, trim, current_timestamp, lit
 from pyspark.sql.types import IntegerType
 
-
+raise Exception("Testing Glue failure alert")
 args = getResolvedOptions(
     sys.argv,
     [
