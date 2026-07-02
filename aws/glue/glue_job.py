@@ -7,7 +7,7 @@ from pyspark.context import SparkContext
 from pyspark.sql.functions import col, trim, current_timestamp, lit
 from pyspark.sql.types import IntegerType
 
-
+raise Exception("Testing Glue failure alert")
 args = getResolvedOptions(
     sys.argv,
     [
@@ -29,7 +29,7 @@ sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 
-# s3_input_path = args["S3_INPUT_PATH"]
+s3_input_path = args["S3_INPUT_PATH"]
 table_name = args["TABLE_NAME"]
 
 user_id = args["USER_ID"]
