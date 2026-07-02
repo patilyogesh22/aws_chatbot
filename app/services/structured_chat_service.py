@@ -567,7 +567,8 @@ def generate_sql(
     document_id: int,
 ) -> str:
     complexity = classify_question_complexity(question)
-
+    print(f"[SQL Complexity] {complexity}")
+    print(f"[SQL] max_tokens={max_tokens}")
     if complexity == "simple":
         system_prompt = SIMPLE_SQL_PROMPT
         max_tokens = 200
