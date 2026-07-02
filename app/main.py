@@ -20,7 +20,7 @@ app = FastAPI(
     version="3.5.0"
 )
 xray_recorder.configure(service="docchat-api")
-patch_all()
+patch_all(psycopg2=False)
 
 @app.middleware("http")
 async def xray_trace_requests(request, call_next):
