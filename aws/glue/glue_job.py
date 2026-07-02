@@ -29,6 +29,8 @@ sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 
+spark.conf.set("spark.sql.shuffle.partitions", "10")
+spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
 s3_input_path = args["S3_INPUT_PATH"]
 table_name = args["TABLE_NAME"]
 

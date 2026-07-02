@@ -1,9 +1,7 @@
 import os
-import psycopg2
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Header, HTTPException
 
-from app.config import PG_DSN
 from app.db import get_db_connection
 from app.auth import get_current_user
 from app.services.dbt_service import run_dbt_build
@@ -34,11 +32,62 @@ def internal_run_dbt(x_internal_api_key: str = Header(None)):
     }
 
 
+def quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def create_structured_indexes(table_name: str):
+    safe_table = quote_ident(table_name)
+
+    important_columns = [
+        "department",
+        "employee_id",
+        "customer_id",
+        "product_id",
+        "order_id",
+        "city",
+        "state",
+        "category",
+        "date",
+        "join_date",
+        "salary",
+        "age",
+        "gender",
+    ]
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS {quote_ident(f"idx_{table_name}_user_doc")}
+                ON {safe_table}(user_id, document_id)
+            """)
+
+            for column in important_columns:
+                cur.execute("""
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = %s
+                      AND column_name = %s
+                """, (table_name, column))
+
+                if cur.fetchone():
+                    safe_col = quote_ident(column)
+                    index_name = quote_ident(f"idx_{table_name}_{column}")
+
+                    cur.execute(f"""
+                        CREATE INDEX IF NOT EXISTS {index_name}
+                        ON {safe_table}(user_id, document_id, {safe_col})
+                    """)
+
+    print(f"[indexes] Indexes checked/created for table: {table_name}")
+
+
 class StructuredReadyRequest(BaseModel):
     user_id: int
     document_id: int
     table_name: str
     status: str = "ready"
+
 
 @router.post("/internal/structured/mark-ready")
 def mark_structured_ready(
@@ -53,7 +102,6 @@ def mark_structured_ready(
 
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            # 1. Mark app document ready
             cur.execute("""
                 UPDATE app_documents
                 SET processing_status = %s,
@@ -67,7 +115,6 @@ def mark_structured_ready(
                 req.document_id,
             ))
 
-            # 2. Mark structured dataset ready
             cur.execute("""
                 UPDATE structured_datasets
                 SET status = %s,
@@ -82,7 +129,6 @@ def mark_structured_ready(
                 req.document_id,
             ))
 
-            # 3. Mark upload event ready
             cur.execute("""
                 UPDATE file_upload_events
                 SET status = %s
@@ -94,6 +140,8 @@ def mark_structured_ready(
                 req.document_id,
             ))
 
+    if req.status == "ready":
+        create_structured_indexes(req.table_name)
 
     return {
         "status": "updated",
@@ -106,7 +154,9 @@ def mark_structured_ready(
             "structured_datasets",
             "file_upload_events"
         ],
+        "indexes_created": req.status == "ready",
     }
+
 
 class DocumentErrorRequest(BaseModel):
     user_id: int
