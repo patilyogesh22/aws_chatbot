@@ -52,6 +52,7 @@ def get_db_connection():
         release_conn(conn)
 
 
+
 def close_pool():
     global _pool
 
