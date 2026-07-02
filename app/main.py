@@ -20,6 +20,7 @@ app = FastAPI(
     title="RAG Chatbot API Authenticated",
     version="3.5.0"
 )
+
 xray_recorder.configure(service="docchat-api")
 patch_all()
 app.add_middleware(XRayMiddleware, recorder=xray_recorder)
