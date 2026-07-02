@@ -36,6 +36,7 @@ MAX_ROWS_RETURNED = 100
 CACHE_TTL_HOURS = 24
 SCHEMA_CONTEXT_CACHE = {}
 SCHEMA_CONTEXT_CACHE_TTL_SECONDS = 3600
+
 def handle_groq_error(e: Exception):
     msg = str(e)
 
@@ -465,14 +466,28 @@ def answer_column_list(schema: List[Dict], table_name: str, file_name: str) -> D
     }
 
 
-def generate_sql(
-    question: str,
-    table_name: str,
-    schema_context: str,
-    user_id: int,
-    document_id: int,
-) -> str:
-    system_prompt = """
+
+
+SIMPLE_SQL_PROMPT = """
+You are a PostgreSQL SQL generator for simple structured-data questions.
+
+Rules:
+1. Return ONLY SQL. No markdown. No explanation.
+2. Use ONLY the given table.
+3. Always include BOTH filters:
+   WHERE user_id = <current_user_id>
+   AND document_id = <current_document_id>
+4. Never expose system columns in SELECT: user_id, document_id, source_file_name, processed_at.
+5. Only SELECT queries are allowed.
+6. Never use INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE, COPY, EXECUTE, CALL, MERGE.
+7. For simple count questions, use COUNT(*).
+8. For simple total/sum/average/min/max questions, use SUM, AVG, MIN, or MAX.
+9. For numeric-looking text columns, use CAST(REPLACE(column, ',', '') AS NUMERIC).
+10. Keep the SQL short and efficient.
+"""
+
+
+FULL_SQL_PROMPT = """
 You are an expert PostgreSQL SQL generator for a secure structured-data chatbot.
 
 Your job:
@@ -520,6 +535,48 @@ Hard rules:
 25. Do not use LIMIT for top N per group except final safety LIMIT if needed.
 """
 
+
+def classify_question_complexity(question: str) -> str:
+    q = question.lower()
+
+    if is_column_list_question(question):
+        return "column_list"
+
+    simple_terms = ["how many", "count", "total", "sum of", "average", "avg", "minimum", "maximum"]
+    group_terms = ["by", "per", "each", "group", "department", "category", "city", "state"]
+
+    if any(term in q for term in simple_terms):
+        if not any(term in q for term in group_terms):
+            return "simple"
+
+    complex_terms = [
+        "top", "highest", "lowest", "per", "each", "rank", "best",
+        "group", "by", "department wise", "category wise", "city wise"
+    ]
+
+    if any(term in q for term in complex_terms):
+        return "complex"
+
+    return "standard"
+
+def generate_sql(
+    question: str,
+    table_name: str,
+    schema_context: str,
+    user_id: int,
+    document_id: int,
+) -> str:
+    complexity = classify_question_complexity(question)
+
+    if complexity == "simple":
+        system_prompt = SIMPLE_SQL_PROMPT
+        max_tokens = 200
+    else:
+        system_prompt = FULL_SQL_PROMPT
+        max_tokens = 500
+
+    print(f"[sql generator] complexity={complexity}, max_tokens={max_tokens}")
+
     user_prompt = f"""
 Table:
 {table_name}
@@ -545,11 +602,10 @@ Generate SQL:
             {"role": "user", "content": user_prompt},
         ],
         temperature=0,
-        max_tokens=500,
+        max_tokens=max_tokens,
     )
 
     return clean_llm_sql(content)
-
 
 def repair_sql(
     question: str,
