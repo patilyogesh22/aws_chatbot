@@ -27,9 +27,7 @@ def internal_run_dbt(x_internal_api_key: str = Header(None)):
     if x_internal_api_key != INTERNAL_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid internal API key")
 
-    return {
-        "dbt_status": run_dbt_build()
-    }
+    return {"dbt_status": run_dbt_build()}
 
 
 def quote_ident(name: str) -> str:
@@ -39,20 +37,16 @@ def quote_ident(name: str) -> str:
 def create_structured_indexes(table_name: str):
     safe_table = quote_ident(table_name)
 
-    important_columns = [
+    index_keywords = [
+        "id",
+        "date",
         "department",
-        "employee_id",
-        "customer_id",
-        "product_id",
-        "order_id",
+        "category",
         "city",
         "state",
-        "category",
-        "date",
-        "join_date",
         "salary",
-        "age",
-        "gender",
+        "amount",
+        "price",
     ]
 
     with get_db_connection() as conn:
@@ -62,15 +56,24 @@ def create_structured_indexes(table_name: str):
                 ON {safe_table}(user_id, document_id)
             """)
 
-            for column in important_columns:
-                cur.execute("""
-                    SELECT 1
-                    FROM information_schema.columns
-                    WHERE table_name = %s
-                      AND column_name = %s
-                """, (table_name, column))
+            cur.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = %s
+            """, (table_name,))
 
-                if cur.fetchone():
+            columns = [row[0] for row in cur.fetchall()]
+
+            for column in columns:
+                if column in ("user_id", "document_id"):
+                    continue
+
+                should_index = any(
+                    keyword in column.lower()
+                    for keyword in index_keywords
+                )
+
+                if should_index:
                     safe_col = quote_ident(column)
                     index_name = quote_ident(f"idx_{table_name}_{column}")
 
@@ -109,11 +112,7 @@ def mark_structured_ready(
                     updated_at = NOW()
                 WHERE user_id = %s
                   AND id = %s
-            """, (
-                req.status,
-                req.user_id,
-                req.document_id,
-            ))
+            """, (req.status, req.user_id, req.document_id))
 
             cur.execute("""
                 UPDATE structured_datasets
@@ -134,11 +133,7 @@ def mark_structured_ready(
                 SET status = %s
                 WHERE user_id = %s
                   AND document_id = %s
-            """, (
-                req.status,
-                req.user_id,
-                req.document_id,
-            ))
+            """, (req.status, req.user_id, req.document_id))
 
     if req.status == "ready":
         create_structured_indexes(req.table_name)
@@ -185,21 +180,14 @@ def mark_document_error(
                     updated_at = NOW()
                 WHERE user_id = %s
                   AND id = %s
-            """, (
-                req.error,
-                req.user_id,
-                req.document_id,
-            ))
+            """, (req.error, req.user_id, req.document_id))
 
             cur.execute("""
                 UPDATE file_upload_events
                 SET status = 'error'
                 WHERE user_id = %s
                   AND document_id = %s
-            """, (
-                req.user_id,
-                req.document_id,
-            ))
+            """, (req.user_id, req.document_id))
 
             if req.file_type == "structured":
                 cur.execute("""
@@ -208,10 +196,7 @@ def mark_document_error(
                         updated_at = NOW()
                     WHERE user_id = %s
                       AND document_id = %s
-                """, (
-                    req.user_id,
-                    req.document_id,
-                ))
+                """, (req.user_id, req.document_id))
 
     return {
         "status": "error_updated",
