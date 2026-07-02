@@ -6,7 +6,6 @@ from app.config import DATA_RAW_DIR
 from app.auth import router as auth_router
 from app.services.startup_service import startup
 from aws_xray_sdk.core import xray_recorder, patch_all
-from aws_xray_sdk.ext.fastapi.middleware import XRayMiddleware
 from app.routes import health
 from app.routes import upload
 from app.routes import chat
@@ -20,10 +19,27 @@ app = FastAPI(
     title="RAG Chatbot API Authenticated",
     version="3.5.0"
 )
-
 xray_recorder.configure(service="docchat-api")
 patch_all()
-app.add_middleware(XRayMiddleware, recorder=xray_recorder)
+
+@app.middleware("http")
+async def xray_trace_requests(request, call_next):
+    segment = xray_recorder.begin_segment("docchat-api")
+
+    segment.put_annotation("path", request.url.path)
+    segment.put_annotation("method", request.method)
+
+    try:
+        response = await call_next(request)
+        segment.put_annotation("status_code", response.status_code)
+        return response
+
+    except Exception as e:
+        segment.add_exception(e, stack=True)
+        raise
+
+    finally:
+        xray_recorder.end_segment()
 app.middleware("http")(log_requests)
 app.add_middleware(
     CORSMiddleware,
