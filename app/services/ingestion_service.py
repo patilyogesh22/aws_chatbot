@@ -193,7 +193,9 @@ def ingest_file(
     file_name: str = None,
     file_hash: str = None,
     user_id: int = None,
-    document_id: int = None
+    document_id: int = None,
+    s3_bucket: str = None,
+    s3_key: str = None,
 ) -> List[Dict]:
 
     init_postgres()
@@ -205,6 +207,33 @@ def ingest_file(
 
     raw_text = extract_text(file_path)
     raw_text = raw_text.replace("\x00", "")
+
+    print("========== PDF EXTRACTION CHECK ==========")
+    print("file_name:", file_name)
+    print("s3_bucket:", s3_bucket)
+    print("s3_key:", s3_key)
+    print("raw_text_length:", len(raw_text.strip()))
+
+    if (
+        file_name
+        and file_name.lower().endswith(".pdf")
+        and len(raw_text.strip()) < 200
+        and s3_bucket
+        and s3_key
+    ):
+        print("[textract] Low PDF text detected. Using Textract fallback...")
+
+        from app.services.textract_service import extract_text_with_textract
+
+        raw_text = extract_text_with_textract(
+            bucket=s3_bucket,
+            key=s3_key,
+        )
+
+        raw_text = raw_text.replace("\x00", "")
+        print("[textract] Final text length after Textract:", len(raw_text.strip()))
+    else:
+        print("[textract] Fallback not needed")
 
     chunks = chunk_text(raw_text)
 
@@ -314,7 +343,9 @@ def ingest_file_from_s3_key(
             file_name=file_name,
             file_hash=file_hash,
             user_id=user_id,
-            document_id=document_id
+            document_id=document_id,
+            s3_bucket=bucket,
+            s3_key=s3_key,
         )
 
     finally:
