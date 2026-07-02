@@ -29,7 +29,7 @@ sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 
-s3_input_path = args["S3_INPUT_PATH"]
+# s3_input_path = args["S3_INPUT_PATH"]
 table_name = args["TABLE_NAME"]
 
 user_id = args["USER_ID"]
@@ -49,6 +49,22 @@ def clean_column_name(name):
     name = re.sub(r"_+", "_", name)
     return name.strip("_") or "column"
 
+
+def validate_data_quality(df, file_name):
+    total_rows = df.count()
+
+    if total_rows == 0:
+        raise Exception(f"File {file_name} has 0 rows after cleaning. Rejecting.")
+
+    for field in df.schema.fields:
+        null_count = df.filter(col(field.name).isNull()).count()
+        null_pct = null_count / total_rows if total_rows > 0 else 0
+
+        if null_pct > 0.9:
+            print(f"[WARNING] Column '{field.name}' is {null_pct * 100:.0f}% null")
+
+    print(f"[glue] Data quality check passed: {total_rows} rows")
+    return df
 
 
 print("Starting direct S3 to RDS Glue ETL")
@@ -94,6 +110,7 @@ for field in df.schema.fields:
 
 df = df.dropna(how="all")
 df = df.dropDuplicates()
+df = validate_data_quality(df, file_name)
 
 df = df.withColumn(
     "user_id",
