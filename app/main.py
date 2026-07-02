@@ -13,13 +13,13 @@ from app.routes import files
 from app.routes import history
 from app.routes import stats
 from app.routes import internal_dbt
-
+from app.middleware.logging import log_requests
 
 app = FastAPI(
     title="RAG Chatbot API Authenticated",
     version="3.5.0"
 )
-
+app.middleware("http")(log_requests)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
