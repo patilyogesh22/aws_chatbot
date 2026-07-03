@@ -18,6 +18,7 @@ from app.config import (
     EMBEDDING_MODEL,
 )
 from app.db import get_db_connection
+from app.services.cloudwatch_metrics import send_metric
 _pgvector_initialized = False
 _model: SentenceTransformer = None
 
@@ -169,6 +170,7 @@ def embed_and_store(chunks: List[Dict]) -> int:
     """
 
     if not chunks:
+        send_metric("EmbeddingsSkippedNoChunks", 1)
         return 0
 
     init_pgvector()
@@ -225,6 +227,7 @@ def embed_and_store(chunks: List[Dict]) -> int:
                 inserted += 1
 
         print(f"[embeddings] Stored {inserted} vectors in PostgreSQL pgvector")
+        send_metric("EmbeddingsCreated", inserted)
         return inserted
 
 

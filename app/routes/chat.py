@@ -12,6 +12,7 @@ from app.auth import get_current_user
 from app.services.rag_service import retrieve, build_context
 from app.services.llm_service import answer, synthesise_multi_file_answer
 from app.services.structured_chat_service import answer_structured_question
+from app.services.cloudwatch_metrics import send_metric
 
 router = APIRouter()
 
@@ -129,6 +130,9 @@ def _answer_single_file(req: ChatRequest, user_id: int, file_name: Optional[str]
                     question=req.question,
                 )
 
+                send_metric("ChatRequests", 1)
+                send_metric("StructuredChatSuccess", 1)
+
                 _save_chat_history(
                     user_id=user_id,
                     question=req.question,
@@ -150,6 +154,8 @@ def _answer_single_file(req: ChatRequest, user_id: int, file_name: Optional[str]
                 return structured_response
 
             except Exception as e:
+                send_metric("ChatErrors", 1)
+                send_metric("StructuredChatErrors", 1)
                 return {
                     "answer": f"Structured file query failed: {str(e)}",
                     "chunks": [],
@@ -172,6 +178,8 @@ def _answer_single_file(req: ChatRequest, user_id: int, file_name: Optional[str]
     )
 
     if not chunks:
+        send_metric("ChatErrors", 1)
+        send_metric("UnstructuredNoChunks", 1)
         return {
             "answer": "No relevant documents found for your account. Please upload a file first.",
             "chunks": [],
@@ -182,6 +190,10 @@ def _answer_single_file(req: ChatRequest, user_id: int, file_name: Optional[str]
     context = build_context(chunks)
     response = answer(req.question, context, req.chat_history)
     sources = list({c["file_name"] for c in chunks})
+
+    send_metric("ChatRequests", 1)
+    send_metric("UnstructuredQueries", 1)
+    send_metric("UnstructuredChatSuccess", 1)
 
     _save_chat_history(
         user_id=user_id,
@@ -238,6 +250,8 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
                 question=req.question,
             )
 
+            send_metric("StructuredQueries", 1)
+
             per_file_answers.append({
                 "file_name": file_name,
                 "file_type": "structured",
@@ -253,6 +267,7 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
             })
 
         except Exception as e:
+            send_metric("StructuredChatErrors", 1)
             per_file_answers.append({
                 "file_name": file_name,
                 "file_type": "structured",
@@ -279,6 +294,8 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
         if chunks:
             context = build_context(chunks)
             rag_answer = answer(req.question, context, req.chat_history)
+
+            send_metric("UnstructuredQueries", 1)
 
             per_file_answers.append({
                 "file_names": unstructured_files,
@@ -348,6 +365,9 @@ def _answer_multi_file(req: ChatRequest, user_id: int, selected_files: list[str]
     ]
 
     total_row_count = sum(item.get("row_count", 0) or 0 for item in per_file_answers)
+
+    send_metric("ChatRequests", 1)
+    send_metric("MultiFileQueries", 1)
 
     _save_chat_history(
         user_id=user_id,

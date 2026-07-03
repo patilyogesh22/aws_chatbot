@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from app.db import get_db_connection
 from app.auth import get_current_user
 from app.services.dbt_service import run_dbt_build
+from app.services.cloudwatch_metrics import send_metric
 
 router = APIRouter()
 
@@ -13,10 +14,16 @@ INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 @router.post("/dbt/run")
 def run_dbt(current_user: dict = Depends(get_current_user)):
-    return {
-        "user_id": current_user["id"],
-        "dbt_status": run_dbt_build()
-    }
+    try:
+        result = run_dbt_build()
+        send_metric("DBTRunSuccess", 1)
+        return {
+            "user_id": current_user["id"],
+            "dbt_status": result
+        }
+    except Exception:
+        send_metric("DBTRunFailed", 1)
+        raise
 
 
 @router.post("/internal/dbt/run")
@@ -27,7 +34,13 @@ def internal_run_dbt(x_internal_api_key: str = Header(None)):
     if x_internal_api_key != INTERNAL_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid internal API key")
 
-    return {"dbt_status": run_dbt_build()}
+    try:
+        result = run_dbt_build()
+        send_metric("DBTRunSuccess", 1)
+        return {"dbt_status": result}
+    except Exception:
+        send_metric("DBTRunFailed", 1)
+        raise
 
 
 def quote_ident(name: str) -> str:
@@ -137,6 +150,7 @@ def mark_structured_ready(
 
     if req.status == "ready":
         create_structured_indexes(req.table_name)
+        send_metric("StructuredFilesReady", 1)
 
     return {
         "status": "updated",
@@ -197,6 +211,8 @@ def mark_document_error(
                     WHERE user_id = %s
                       AND document_id = %s
                 """, (req.user_id, req.document_id))
+
+    send_metric("FilesFailed", 1)
 
     return {
         "status": "error_updated",

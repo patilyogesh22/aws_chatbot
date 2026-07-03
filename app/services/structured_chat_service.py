@@ -22,6 +22,7 @@ from app.db import get_db_connection
 
 from app.config import PG_DSN, GROQ_API_KEY, GROQ_MODEL
 from app.services.ai_fallback_service import call_ai_with_fallback
+from app.services.cloudwatch_metrics import send_metric
 
 
 
@@ -283,9 +284,11 @@ def get_schema_context_cached(
 
     if cached and now - cached["created_at"] < SCHEMA_CONTEXT_CACHE_TTL_SECONDS:
         print("[schema cache] HIT")
+        send_metric("SchemaCacheHit", 1)
         return cached["schema"], cached["schema_context"]
 
     print("[schema cache] MISS")
+    send_metric("SchemaCacheMiss", 1)
 
     schema = schema_from_json(table_info.get("schema_json") or {})
 
@@ -568,6 +571,17 @@ def generate_sql(
 ) -> str:
     complexity = classify_question_complexity(question)
 
+    send_metric(
+        "SQLQueryComplexity",
+        1,
+        dimensions=[
+            {
+                "Name": "Complexity",
+                "Value": complexity,
+            }
+        ],
+    )
+
     if complexity == "simple":
         system_prompt = SIMPLE_SQL_PROMPT
         max_tokens = 200
@@ -835,8 +849,12 @@ def answer_structured_question(
     )
 
     if cached:
+        send_metric("QueryCacheHit", 1)
         cached["table_name"] = table_name
         return cached
+
+    send_metric("QueryCacheMiss", 1)
+    send_metric("StructuredQueries", 1)
 
     schema, schema_context = get_schema_context_cached(
         table_name=table_name,

@@ -18,6 +18,7 @@ import psycopg2
 from psycopg2.extras import execute_values
 
 from app.config import PG_DSN, CHUNK_SIZE, CHUNK_OVERLAP
+from app.services.cloudwatch_metrics import send_metric
 
 
 AWS_REGION = os.getenv("AWS_REGION", "eu-north-1")
@@ -222,6 +223,7 @@ def ingest_file(
         and s3_key
     ):
         print("[textract] Low PDF text detected. Using Textract fallback...")
+        send_metric("TextractFallbackUsed", 1)
 
         from app.services.textract_service import extract_text_with_textract
 
@@ -274,6 +276,7 @@ def ingest_file(
         ))
 
     if not rows:
+        send_metric("FilesProcessedWithNoChunks", 1)
         return []
 
     with get_conn() as conn:
@@ -312,6 +315,9 @@ def ingest_file(
             """, rows)
 
         conn.commit()
+
+    send_metric("FilesProcessed", 1)
+    send_metric("ChunksCreated", len(records))
 
     return records
 
