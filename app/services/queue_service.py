@@ -5,7 +5,6 @@ from pathlib import Path
 
 import boto3
 
-
 AWS_REGION = os.getenv("AWS_REGION", "eu-north-1")
 SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL")
 
@@ -29,9 +28,6 @@ def send_file_to_queue(
     s3_key: str,
     file_size: int,
 ):
-    if not SQS_QUEUE_URL:
-        raise RuntimeError("SQS_QUEUE_URL is not set")
-
     dataset_name = clean_table_name(file_name)
     table_name = f"u{user_id}_d{document_id}_{dataset_name}"
 
@@ -53,4 +49,4 @@ def send_file_to_queue(
         MessageBody=json.dumps(message),
     )
 
-    return response["MessageId"]
+    return response["MessageId"], dataset_name, table_name

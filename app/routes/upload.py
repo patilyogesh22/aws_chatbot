@@ -1,21 +1,18 @@
 import os
 import io
 import hashlib
-import psycopg2
 
 from fastapi import APIRouter, File, UploadFile, HTTPException, Depends
 
-from app.config import PG_DSN
 from app.db import get_db_connection
 from app.auth import get_current_user
 from app.utils.file_classifier import classify_file
 from app.utils.structured_converter import convert_excel_to_csv
-from app.services.queue_service import send_file_to_queue
+from app.services.queue_service import send_file_to_queue, clean_table_name
 from aws.s3_ingestion import upload_fileobj_to_s3
 
 
 router = APIRouter()
-
 
 SUPPORTED_MESSAGE = "Unsupported file type. Supported: CSV, Excel, JSON, PDF, DOCX, TXT, MD, PPTX"
 
@@ -62,7 +59,8 @@ def update_processing_status(
             if event_status:
                 cur.execute("""
                     UPDATE file_upload_events
-                    SET status = %s
+                    SET status = %s,
+                        updated_at = NOW()
                     WHERE user_id = %s
                       AND document_id = %s
                 """, (
@@ -70,7 +68,6 @@ def update_processing_status(
                     user_id,
                     document_id,
                 ))
-
 
 
 def insert_file_upload_event(
@@ -82,6 +79,9 @@ def insert_file_upload_event(
     file_type: str,
     document_id: int,
     status: str,
+    bucket_name: str,
+    dataset_name: str,
+    table_name: str,
 ):
     with get_db_connection() as conn:
         with conn.cursor() as cur:
@@ -91,19 +91,26 @@ def insert_file_upload_event(
                     user_id,
                     file_name,
                     s3_key,
+                    bucket_name,
                     file_size,
                     file_type,
                     document_id,
-                    status
+                    dataset_name,
+                    table_name,
+                    status,
+                    updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             """, (
                 user_id,
                 file_name,
                 s3_key,
+                bucket_name,
                 file_size,
                 file_type,
                 document_id,
+                dataset_name,
+                table_name,
                 status,
             ))
 
@@ -292,6 +299,8 @@ def _process_upload_content(
 
             document_id = cur.fetchone()[0]
 
+    dataset_name = clean_table_name(original_filename)
+    table_name = f"u{user_id}_d{document_id}_{dataset_name}"
 
     insert_file_upload_event(
         user_id=user_id,
@@ -301,6 +310,9 @@ def _process_upload_content(
         file_type=file_type,
         document_id=document_id,
         status="upload_saved",
+        bucket_name=s3_bucket,
+        dataset_name=dataset_name,
+        table_name=table_name,
     )
 
     if file_type == "structured":
@@ -312,13 +324,17 @@ def _process_upload_content(
                         user_id,
                         document_id,
                         file_name,
+                        dataset_name,
+                        table_name,
                         raw_s3_key,
                         status
                     )
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (user_id, document_id)
                     DO UPDATE SET
                         file_name = EXCLUDED.file_name,
+                        dataset_name = EXCLUDED.dataset_name,
+                        table_name = EXCLUDED.table_name,
                         raw_s3_key = EXCLUDED.raw_s3_key,
                         status = EXCLUDED.status,
                         updated_at = NOW()
@@ -326,13 +342,14 @@ def _process_upload_content(
                     user_id,
                     document_id,
                     original_filename,
+                    dataset_name,
+                    table_name,
                     s3_key,
                     "upload_saved",
                 ))
 
-
     try:
-        sqs_message_id = send_file_to_queue(
+        sqs_message_id, dataset_name, table_name = send_file_to_queue(
             user_id=user_id,
             document_id=document_id,
             file_name=original_filename,
@@ -374,6 +391,8 @@ def _process_upload_content(
             "document_id": document_id,
             "sqs_message_id": sqs_message_id,
             "processing_status": "sqs_queued",
+            "dataset_name": dataset_name,
+            "table_name": table_name,
             "next_step": next_step,
         }
 
@@ -492,7 +511,7 @@ async def upload_files_batch(
 @router.post("/upload/{document_id}/retry-queue")
 async def retry_queue_document(
     document_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     try:
         s3_bucket = os.getenv("S3_BUCKET")
@@ -520,7 +539,7 @@ async def retry_queue_document(
                     LIMIT 1
                 """, (
                     document_id,
-                    current_user["id"]
+                    current_user["id"],
                 ))
 
                 row = cur.fetchone()
@@ -536,7 +555,7 @@ async def retry_queue_document(
                 detail="Retry queue is only for structured and unstructured files currently"
             )
 
-        sqs_message_id = send_file_to_queue(
+        sqs_message_id, dataset_name, table_name = send_file_to_queue(
             user_id=user_id,
             document_id=document_id,
             file_name=file_name,
@@ -570,7 +589,9 @@ async def retry_queue_document(
             "file_type": file_type,
             "old_status": old_structured_status or old_doc_status,
             "new_status": "sqs_queued",
-            "sqs_message_id": sqs_message_id
+            "sqs_message_id": sqs_message_id,
+            "dataset_name": dataset_name,
+            "table_name": table_name,
         }
 
     except HTTPException:
