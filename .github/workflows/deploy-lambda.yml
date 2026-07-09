@@ -22,44 +22,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-north-1
 
-      - name: Build SQS Lambda zip
-        run: |
-          cd aws/lambda_s3_trigger
-          rm -rf package lambda.zip
-          mkdir package
-
-          python -m pip install --upgrade pip
-
-          pip install \
-            --platform manylinux2014_x86_64 \
-            --target package \
-            --implementation cp \
-            --python-version 3.11 \
-            --only-binary=:all: \
-            -r requirements-lambda.txt
-
-          cp lambda_handler.py package/
-
-          cd package
-          zip -r ../lambda.zip .
-          cd ..
-
-      - name: Deploy SQS Lambda
-        run: |
-          aws lambda update-function-code \
-            --function-name chatbot-s3-trigger \
-            --zip-file fileb://aws/lambda_s3_trigger/lambda.zip
-
-          aws lambda wait function-updated-v2 \
-            --function-name chatbot-s3-trigger
-
-      - name: Update SQS Lambda Environment
-        run: |
-          aws lambda update-function-configuration \
-            --function-name chatbot-s3-trigger \
-            --environment "Variables={PG_HOST=${{ secrets.PG_HOST }},PG_DB=${{ secrets.PG_DB }},PG_USER=${{ secrets.PG_USER }},PG_PASSWORD=${{ secrets.PG_PASSWORD }},PG_PORT=5432,GLUE_JOB_NAME=structured-file-etl-job,STEP_FUNCTION_ARN=${{ secrets.STEP_FUNCTION_ARN }}}"
-          aws lambda wait function-updated-v2 \
-            --function-name chatbot-s3-trigger
+      
 
       - name: Build Run DBT Lambda zip
         run: |

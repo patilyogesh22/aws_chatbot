@@ -351,7 +351,7 @@ def _process_upload_content(
                 event_status="sqs_queued",
             )
 
-            next_step = "SQS → Lambda → Step Functions → Glue Job → RDS table → NL-to-SQL"
+            next_step = "SQS → EventBridge Pipe → Step Functions → Glue Job → RDS table → NL-to-SQL"
             message = "Structured file uploaded successfully and sent to SQS for processing."
         else:
             update_processing_status(
@@ -361,7 +361,7 @@ def _process_upload_content(
                 event_status="sqs_queued",
             )
 
-            next_step = "SQS → Lambda → Step Functions → ECS Fargate → chunks + embeddings"
+            next_step = "SQS → EventBridge Pipe → Step Functions → ECS Fargate → chunks + embeddings"
             message = "Unstructured file uploaded successfully and sent to SQS for ECS background processing."
 
         return {
