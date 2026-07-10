@@ -2,9 +2,10 @@ name: Deploy Lambda Functions
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
-      - "aws/lambda_s3_trigger/**"
+      - "aws/lambda_prepare_structured_job/**"
       - "aws/lambda_run_dbt_after_glue/**"
       - ".github/workflows/deploy-lambda.yml"
 
@@ -13,7 +14,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -22,11 +24,60 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-north-1
 
-      
+      # --------------------------------------------------
+      # Prepare Structured Glue Job Lambda
+      # --------------------------------------------------
 
-      - name: Build Run DBT Lambda zip
+      - name: Build Prepare Structured Job Lambda
+        run: |
+          cd aws/lambda_prepare_structured_job
+
+          rm -rf package lambda.zip
+          mkdir package
+
+          python -m pip install --upgrade pip
+
+          pip install \
+            --platform manylinux2014_x86_64 \
+            --target package \
+            --implementation cp \
+            --python-version 3.11 \
+            --only-binary=:all: \
+            -r requirements-lambda.txt
+
+          cp lambda_handler.py package/
+
+          cd package
+          zip -r ../lambda.zip .
+          cd ..
+
+      - name: Deploy Prepare Structured Job Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name chatbot-prepare-structured-job \
+            --zip-file fileb://aws/lambda_prepare_structured_job/lambda.zip
+
+          aws lambda wait function-updated-v2 \
+            --function-name chatbot-prepare-structured-job
+
+      - name: Update Prepare Structured Job Lambda environment
+        run: |
+          aws lambda update-function-configuration \
+            --function-name chatbot-prepare-structured-job \
+            --timeout 30 \
+            --environment "Variables={PG_HOST=${{ secrets.PG_HOST }},PG_DB=${{ secrets.PG_DB }},PG_USER=${{ secrets.PG_USER }},PG_PASSWORD=${{ secrets.PG_PASSWORD }},PG_PORT=5432,ICEBERG_DATABASE=chatbot_lakehouse,ICEBERG_WAREHOUSE=s3://chatbot-documents-815512685419-eu-north-1-an/lakehouse/iceberg/}"
+
+          aws lambda wait function-updated-v2 \
+            --function-name chatbot-prepare-structured-job
+
+      # --------------------------------------------------
+      # Run dbt after Glue Lambda
+      # --------------------------------------------------
+
+      - name: Build Run DBT Lambda
         run: |
           cd aws/lambda_run_dbt_after_glue
+
           rm -rf package lambda.zip
           mkdir package
 
@@ -45,7 +96,7 @@ jobs:
           aws lambda wait function-updated-v2 \
             --function-name chatbot-run-dbt-after-glue
 
-      - name: Update Run DBT Lambda Environment
+      - name: Update Run DBT Lambda environment
         run: |
           aws lambda update-function-configuration \
             --function-name chatbot-run-dbt-after-glue \
