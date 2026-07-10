@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "aws/lambda_prepare_structured_job/**"
+      - "aws/lambda_update_structured_success/**"
       - "aws/lambda_run_dbt_after_glue/**"
       - ".github/workflows/deploy-lambda.yml"
 
@@ -25,7 +26,7 @@ jobs:
           aws-region: eu-north-1
 
       # --------------------------------------------------
-      # Prepare Structured Glue Job Lambda
+      # Prepare Structured Job Lambda
       # --------------------------------------------------
 
       - name: Build Prepare Structured Job Lambda
@@ -60,7 +61,7 @@ jobs:
           aws lambda wait function-updated-v2 \
             --function-name chatbot-prepare-structured-job
 
-      - name: Update Prepare Structured Job Lambda environment
+      - name: Update Prepare Structured Job Lambda Environment
         run: |
           aws lambda update-function-configuration \
             --function-name chatbot-prepare-structured-job \
@@ -71,7 +72,53 @@ jobs:
             --function-name chatbot-prepare-structured-job
 
       # --------------------------------------------------
-      # Run dbt after Glue Lambda
+      # Update Structured Success Lambda
+      # --------------------------------------------------
+
+      - name: Build Update Structured Success Lambda
+        run: |
+          cd aws/lambda_update_structured_success
+
+          rm -rf package lambda.zip
+          mkdir package
+
+          python -m pip install --upgrade pip
+
+          pip install \
+            --platform manylinux2014_x86_64 \
+            --target package \
+            --implementation cp \
+            --python-version 3.11 \
+            --only-binary=:all: \
+            -r requirements-lambda.txt
+
+          cp lambda_handler.py package/
+
+          cd package
+          zip -r ../lambda.zip .
+          cd ..
+
+      - name: Deploy Update Structured Success Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name chatbot-update-structured-success \
+            --zip-file fileb://aws/lambda_update_structured_success/lambda.zip
+
+          aws lambda wait function-updated-v2 \
+            --function-name chatbot-update-structured-success
+
+      - name: Update Structured Success Lambda Environment
+        run: |
+          aws lambda update-function-configuration \
+            --function-name chatbot-update-structured-success \
+            --timeout 30 \
+            --environment "Variables={PG_HOST=${{ secrets.PG_HOST }},PG_DB=${{ secrets.PG_DB }},PG_USER=${{ secrets.PG_USER }},PG_PASSWORD=${{ secrets.PG_PASSWORD }},PG_PORT=5432}"
+
+          aws lambda wait function-updated-v2 \
+            --function-name chatbot-update-structured-success
+
+      # --------------------------------------------------
+      # Run dbt After Glue Lambda
       # --------------------------------------------------
 
       - name: Build Run DBT Lambda
@@ -96,7 +143,7 @@ jobs:
           aws lambda wait function-updated-v2 \
             --function-name chatbot-run-dbt-after-glue
 
-      - name: Update Run DBT Lambda environment
+      - name: Update Run DBT Lambda Environment
         run: |
           aws lambda update-function-configuration \
             --function-name chatbot-run-dbt-after-glue \

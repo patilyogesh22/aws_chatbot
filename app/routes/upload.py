@@ -323,8 +323,12 @@ def _process_upload_content(
 
             document_id = cur.fetchone()[0]
 
-    dataset_name = clean_table_name(original_filename)
-    table_name = f"u{user_id}_d{document_id}_{dataset_name}"
+    if file_type == "structured":
+        dataset_name = clean_table_name(original_filename)
+        table_name = f"u{user_id}_d{document_id}_{dataset_name}"
+    else:
+        dataset_name = None
+        table_name = None
 
     insert_file_upload_event(
         user_id=user_id,

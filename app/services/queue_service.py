@@ -28,8 +28,12 @@ def send_file_to_queue(
     s3_key: str,
     file_size: int,
 ):
-    dataset_name = clean_table_name(file_name)
-    table_name = f"u{user_id}_d{document_id}_{dataset_name}"
+    if file_type == "structured":
+        dataset_name = clean_table_name(file_name)
+        table_name = f"u{user_id}_d{document_id}_{dataset_name}"
+    else:
+        dataset_name = None
+        table_name = None
 
     message = {
         "user_id": user_id,

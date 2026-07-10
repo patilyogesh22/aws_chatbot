@@ -25,22 +25,23 @@ ICEBERG_WAREHOUSE = os.getenv(
 
 
 def get_connection():
-    required = {
+    required_variables = {
         "PG_HOST": PG_HOST,
         "PG_DB": PG_DB,
         "PG_USER": PG_USER,
         "PG_PASSWORD": PG_PASSWORD,
     }
 
-    missing = [
+    missing_variables = [
         name
-        for name, value in required.items()
+        for name, value in required_variables.items()
         if not value
     ]
 
-    if missing:
+    if missing_variables:
         raise RuntimeError(
-            f"Missing environment variables: {', '.join(missing)}"
+            "Missing environment variables: "
+            + ", ".join(missing_variables)
         )
 
     return psycopg2.connect(
@@ -49,7 +50,7 @@ def get_connection():
         user=PG_USER,
         password=PG_PASSWORD,
         port=PG_PORT,
-        connect_timeout=8,
+        connect_timeout=10,
     )
 
 
@@ -57,7 +58,9 @@ def clean_name(value: str) -> str:
     cleaned = Path(value).stem.lower()
     cleaned = re.sub(r"[^a-z0-9_]", "_", cleaned)
     cleaned = re.sub(r"_+", "_", cleaned)
-    return cleaned.strip("_")
+    cleaned = cleaned.strip("_")
+
+    return cleaned or "dataset"
 
 
 def validate_event(event: dict[str, Any]) -> None:
@@ -79,12 +82,13 @@ def validate_event(event: dict[str, Any]) -> None:
 
     if missing_fields:
         raise ValueError(
-            f"Missing required fields: {', '.join(missing_fields)}"
+            "Missing required fields: "
+            + ", ".join(missing_fields)
         )
 
     if event["file_type"] != "structured":
         raise ValueError(
-            "PrepareStructuredJob Lambda only accepts structured files"
+            "This Lambda accepts only structured files"
         )
 
 
@@ -116,24 +120,31 @@ def update_processing_metadata(
     *,
     user_id: int,
     document_id: int,
+    bucket_name: str,
     dataset_name: str,
     table_name: str,
     iceberg_database: str,
     iceberg_warehouse: str,
+    step_function_execution_arn: str | None,
 ) -> None:
+    iceberg_s3_path = (
+        f"{iceberg_warehouse.rstrip('/')}/"
+        f"{iceberg_database}.db/"
+        f"{table_name}/"
+    )
+
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE app_documents
-                SET processing_status = %s,
+                SET processing_status = 'preparing_glue_job',
                     processing_error = NULL,
                     updated_at = NOW()
                 WHERE id = %s
                   AND user_id = %s
                 """,
                 (
-                    "preparing_glue_job",
                     document_id,
                     user_id,
                 ),
@@ -147,7 +158,9 @@ def update_processing_metadata(
                     iceberg_database = %s,
                     iceberg_table = %s,
                     iceberg_s3_path = %s,
-                    status = %s,
+                    step_function_execution_arn = %s,
+                    status = 'preparing_glue_job',
+                    error_message = NULL,
                     updated_at = NOW()
                 WHERE user_id = %s
                   AND document_id = %s
@@ -157,8 +170,8 @@ def update_processing_metadata(
                     table_name,
                     iceberg_database,
                     table_name,
-                    iceberg_warehouse,
-                    "preparing_glue_job",
+                    iceberg_s3_path,
+                    step_function_execution_arn,
                     user_id,
                     document_id,
                 ),
@@ -167,23 +180,27 @@ def update_processing_metadata(
             cur.execute(
                 """
                 UPDATE file_upload_events
-                SET dataset_name = %s,
+                SET bucket_name = %s,
+                    dataset_name = %s,
                     table_name = %s,
                     iceberg_database = %s,
                     iceberg_table = %s,
                     iceberg_s3_path = %s,
-                    status = %s,
+                    step_function_execution_arn = %s,
+                    status = 'preparing_glue_job',
+                    error_message = NULL,
                     updated_at = NOW()
                 WHERE user_id = %s
                   AND document_id = %s
                 """,
                 (
+                    bucket_name,
                     dataset_name,
                     table_name,
                     iceberg_database,
                     table_name,
-                    iceberg_warehouse,
-                    "preparing_glue_job",
+                    iceberg_s3_path,
+                    step_function_execution_arn,
                     user_id,
                     document_id,
                 ),
@@ -194,58 +211,65 @@ def update_processing_metadata(
 
 def lambda_handler(event, context):
     print("Structured preparation event:")
-    print(json.dumps(event))
+    print(json.dumps(event, default=str))
 
-    try:
-        validate_event(event)
+    validate_event(event)
 
-        user_id = int(event["user_id"])
-        document_id = int(event["document_id"])
-        file_name = str(event["file_name"])
+    user_id = int(event["user_id"])
+    document_id = int(event["document_id"])
+    file_name = str(event["file_name"])
+    bucket_name = str(event["bucket"])
 
-        if not document_exists(
-            user_id=user_id,
-            document_id=document_id,
-        ):
-            raise ValueError(
-                f"Document not found: user_id={user_id}, "
-                f"document_id={document_id}"
-            )
-
-        dataset_name = event.get("dataset_name") or clean_name(file_name)
-
-        table_name = event.get("table_name") or (
-            f"u{user_id}_d{document_id}_{dataset_name}"
+    if not document_exists(
+        user_id=user_id,
+        document_id=document_id,
+    ):
+        raise ValueError(
+            f"Document not found: user_id={user_id}, "
+            f"document_id={document_id}"
         )
 
-        iceberg_database = ICEBERG_DATABASE
-        iceberg_warehouse = ICEBERG_WAREHOUSE.rstrip("/") + "/"
+    dataset_name = (
+        event.get("dataset_name")
+        or clean_name(file_name)
+    )
 
-        update_processing_metadata(
-            user_id=user_id,
-            document_id=document_id,
-            dataset_name=dataset_name,
-            table_name=table_name,
-            iceberg_database=iceberg_database,
-            iceberg_warehouse=iceberg_warehouse,
-        )
+    table_name = (
+        event.get("table_name")
+        or f"u{user_id}_d{document_id}_{dataset_name}"
+    )
 
-        result = {
-            **event,
-            "user_id": user_id,
-            "document_id": document_id,
-            "dataset_name": dataset_name,
-            "table_name": table_name,
-            "iceberg_database": iceberg_database,
-            "iceberg_warehouse": iceberg_warehouse,
-            "preparation_status": "ready",
-        }
+    iceberg_database = ICEBERG_DATABASE.strip().lower()
+    iceberg_warehouse = ICEBERG_WAREHOUSE.rstrip("/") + "/"
 
-        print("Structured job prepared:")
-        print(json.dumps(result))
+    step_function_execution_arn = event.get(
+        "step_function_execution_arn"
+    )
 
-        return result
+    update_processing_metadata(
+        user_id=user_id,
+        document_id=document_id,
+        bucket_name=bucket_name,
+        dataset_name=dataset_name,
+        table_name=table_name,
+        iceberg_database=iceberg_database,
+        iceberg_warehouse=iceberg_warehouse,
+        step_function_execution_arn=step_function_execution_arn,
+    )
 
-    except Exception as error:
-        print(f"Structured preparation failed: {error}")
-        raise
+    result = {
+        **event,
+        "user_id": user_id,
+        "document_id": document_id,
+        "dataset_name": dataset_name,
+        "table_name": table_name,
+        "iceberg_database": iceberg_database,
+        "iceberg_warehouse": iceberg_warehouse,
+        "step_function_execution_arn": step_function_execution_arn,
+        "preparation_status": "ready",
+    }
+
+    print("Structured job prepared:")
+    print(json.dumps(result, default=str))
+
+    return result
