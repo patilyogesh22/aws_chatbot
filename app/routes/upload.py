@@ -16,7 +16,17 @@ router = APIRouter()
 
 SUPPORTED_MESSAGE = "Unsupported file type. Supported: CSV, Excel, JSON, PDF, DOCX, TXT, MD, PPTX"
 
+def is_internal_lakehouse_file(filename: str) -> bool:
+    lower_name = filename.lower()
 
+    blocked_patterns = (
+        ".metadata.json",
+        "manifest-list",
+        "snap-",
+        "version-hint.text",
+    )
+
+    return any(pattern in lower_name for pattern in blocked_patterns)
 def update_processing_status(
     *,
     user_id: int,
@@ -202,6 +212,20 @@ def _process_upload_content(
 
     file_hash = hashlib.md5(content).hexdigest()
     file_type = classify_file(filename)
+    if is_internal_lakehouse_file(filename):
+        message = (
+            "Apache Iceberg metadata files cannot be uploaded as user datasets. "
+            "Upload a CSV, Excel file, or tabular JSON dataset instead."
+        )
+
+        if raise_on_duplicate:
+            raise HTTPException(status_code=400, detail=message)
+
+        return {
+            "status": "error",
+            "file": filename,
+            "message": message,
+        }
 
     if file_type == "unknown":
         if raise_on_duplicate:
