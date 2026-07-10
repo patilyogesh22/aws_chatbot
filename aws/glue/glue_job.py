@@ -1,12 +1,40 @@
-import sys
+"""
+AWS Glue structured-file ETL job.
+
+Flow:
+    S3 raw structured file
+        -> PySpark cleaning and validation
+        -> Apache Iceberg table on Amazon S3
+        -> AWS Glue Data Catalog registration
+
+The full structured dataset is no longer written to PostgreSQL.
+PostgreSQL remains responsible only for application and processing metadata.
+"""
+
 import re
+import sys
+from typing import Iterable
 
 from awsglue.context import GlueContext
+from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
+from pyspark import StorageLevel
 from pyspark.context import SparkContext
-from pyspark.sql.functions import col, trim, current_timestamp, lit
-from pyspark.sql.types import IntegerType
+from pyspark.sql import DataFrame
+from pyspark.sql.functions import (
+    col,
+    current_timestamp,
+    lit,
+    sum as spark_sum,
+    trim,
+    when,
+)
+from pyspark.sql.types import IntegerType, StringType
 
+
+# ---------------------------------------------------------------------------
+# Glue job arguments
+# ---------------------------------------------------------------------------
 
 args = getResolvedOptions(
     sys.argv,
@@ -17,145 +45,374 @@ args = getResolvedOptions(
         "USER_ID",
         "DOCUMENT_ID",
         "FILE_NAME",
-        "PG_HOST",
-        "PG_PORT",
-        "PG_DB",
-        "PG_USER",
-        "PG_PASSWORD",
-    ]
+        "ICEBERG_DATABASE",
+        "ICEBERG_WAREHOUSE",
+    ],
 )
 
-sc = SparkContext()
-glueContext = GlueContext(sc)
-spark = glueContext.spark_session
+job_name = args["JOB_NAME"]
+s3_input_path = args["S3_INPUT_PATH"]
+requested_table_name = args["TABLE_NAME"]
+user_id = int(args["USER_ID"])
+document_id = int(args["DOCUMENT_ID"])
+file_name = args["FILE_NAME"]
+iceberg_database = args["ICEBERG_DATABASE"]
+iceberg_warehouse = args["ICEBERG_WAREHOUSE"].rstrip("/") + "/"
+
+
+# ---------------------------------------------------------------------------
+# Spark and Glue initialization
+# ---------------------------------------------------------------------------
+
+sc = SparkContext.getOrCreate()
+glue_context = GlueContext(sc)
+spark = glue_context.spark_session
+
+job = Job(glue_context)
+job.init(job_name, args)
 
 spark.conf.set("spark.sql.shuffle.partitions", "10")
-spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
-s3_input_path = args["S3_INPUT_PATH"]
-table_name = args["TABLE_NAME"]
+spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
 
-user_id = args["USER_ID"]
-document_id = args["DOCUMENT_ID"]
-file_name = args["FILE_NAME"]
+# These settings are also passed through the Glue job's --conf parameter.
+# Setting the catalog values here provides an additional validation/fallback.
+spark.conf.set(
+    "spark.sql.catalog.glue_catalog",
+    "org.apache.iceberg.spark.SparkCatalog",
+)
+spark.conf.set(
+    "spark.sql.catalog.glue_catalog.warehouse",
+    iceberg_warehouse,
+)
+spark.conf.set(
+    "spark.sql.catalog.glue_catalog.catalog-impl",
+    "org.apache.iceberg.aws.glue.GlueCatalog",
+)
+spark.conf.set(
+    "spark.sql.catalog.glue_catalog.io-impl",
+    "org.apache.iceberg.aws.s3.S3FileIO",
+)
 
-pg_host = args["PG_HOST"]
-pg_port = args["PG_PORT"]
-pg_db = args["PG_DB"]
-pg_user = args["PG_USER"]
-pg_password = args["PG_PASSWORD"]
+
+# ---------------------------------------------------------------------------
+# Naming helpers
+# ---------------------------------------------------------------------------
+
+def clean_identifier(value: str, default: str) -> str:
+    """
+    Convert a value into a lowercase Spark/Glue-compatible identifier.
+    """
+    cleaned = str(value).strip().lower()
+    cleaned = re.sub(r"[^a-zA-Z0-9_]", "_", cleaned)
+    cleaned = re.sub(r"_+", "_", cleaned)
+    cleaned = cleaned.strip("_")
+
+    if not cleaned:
+        cleaned = default
+
+    # A table or database identifier should not begin with a number.
+    if cleaned[0].isdigit():
+        cleaned = f"t_{cleaned}"
+
+    return cleaned
 
 
-def clean_column_name(name):
-    name = str(name).strip().lower()
-    name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
-    name = re.sub(r"_+", "_", name)
-    return name.strip("_") or "column"
+def make_unique_column_names(columns: Iterable[str]) -> list[str]:
+    """
+    Clean column names and prevent collisions.
+
+    Example:
+        "Employee Name" -> employee_name
+        "Employee-Name" -> employee_name_2
+    """
+    seen: dict[str, int] = {}
+    cleaned_columns: list[str] = []
+
+    for index, original_name in enumerate(columns, start=1):
+        base_name = clean_identifier(
+            original_name,
+            default=f"column_{index}",
+        )
+
+        count = seen.get(base_name, 0) + 1
+        seen[base_name] = count
+
+        final_name = (
+            base_name
+            if count == 1
+            else f"{base_name}_{count}"
+        )
+
+        cleaned_columns.append(final_name)
+
+    return cleaned_columns
 
 
-def validate_data_quality(df, file_name):
-    total_rows = df.count()
+iceberg_database = clean_identifier(
+    iceberg_database,
+    default="chatbot_lakehouse",
+)
 
-    if total_rows == 0:
-        raise Exception(f"File {file_name} has 0 rows after cleaning. Rejecting.")
+table_name = clean_identifier(
+    requested_table_name,
+    default=f"u{user_id}_d{document_id}_dataset",
+)
+
+table_identifier = (
+    f"glue_catalog.{iceberg_database}.{table_name}"
+)
+
+
+# ---------------------------------------------------------------------------
+# File loading
+# ---------------------------------------------------------------------------
+
+def get_file_extension(path: str) -> str:
+    """
+    Extract the extension from an S3 path while ignoring query parameters.
+    """
+    clean_path = path.split("?", maxsplit=1)[0]
+    file_part = clean_path.rsplit("/", maxsplit=1)[-1]
+
+    if "." not in file_part:
+        return ""
+
+    return file_part.rsplit(".", maxsplit=1)[-1].lower()
+
+
+def read_structured_file(path: str) -> DataFrame:
+    """
+    Load supported structured file types into a Spark DataFrame.
+
+    Excel files are converted to CSV by FastAPI before reaching this job.
+    """
+    extension = get_file_extension(path)
+
+    print(f"[glue] Detected extension: {extension}")
+
+    if extension == "csv":
+        return (
+            spark.read
+            .option("header", "true")
+            .option("inferSchema", "true")
+            .option("mode", "PERMISSIVE")
+            .option("emptyValue", None)
+            .csv(path)
+        )
+
+    if extension == "json":
+        return (
+            spark.read
+            .option("multiLine", "true")
+            .option("mode", "PERMISSIVE")
+            .json(path)
+        )
+
+    if extension == "parquet":
+        return spark.read.parquet(path)
+
+    raise ValueError(
+        "Unsupported structured file type: "
+        f"'{extension or 'unknown'}'. "
+        "Supported Glue inputs are CSV, JSON, and Parquet. "
+        "Excel files must be converted to CSV before processing."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cleaning and validation
+# ---------------------------------------------------------------------------
+
+def clean_dataframe(input_df: DataFrame) -> DataFrame:
+    """
+    Standardize column names, trim strings, remove empty and duplicate rows.
+    """
+    if not input_df.columns:
+        raise ValueError(
+            f"File '{file_name}' does not contain any readable columns."
+        )
+
+    new_column_names = make_unique_column_names(input_df.columns)
+
+    df = input_df.toDF(*new_column_names)
 
     for field in df.schema.fields:
-        null_count = df.filter(col(field.name).isNull()).count()
-        null_pct = null_count / total_rows if total_rows > 0 else 0
+        if isinstance(field.dataType, StringType):
+            df = df.withColumn(
+                field.name,
+                trim(col(field.name)),
+            )
 
-        if null_pct > 0.9:
-            print(f"[WARNING] Column '{field.name}' is {null_pct * 100:.0f}% null")
+    df = df.dropna(how="all")
+    df = df.dropDuplicates()
 
-    print(f"[glue] Data quality check passed: {total_rows} rows")
     return df
 
 
-print("Starting direct S3 to RDS Glue ETL")
-print("Input:", s3_input_path)
-print("Target Table:", table_name)
-print("User ID:", user_id)
-print("Document ID:", document_id)
-print("File Name:", file_name)
+def validate_data_quality(
+    df: DataFrame,
+    source_file_name: str,
+) -> tuple[DataFrame, int]:
+    """
+    Reject empty datasets and print warnings for columns that are over 90% null.
+    """
+    df.persist(StorageLevel.MEMORY_AND_DISK)
 
-file_ext = s3_input_path.lower().split(".")[-1]
+    total_rows = df.count()
 
-if file_ext == "csv":
-    df = (
-        spark.read
-        .option("header", "true")
-        .option("inferSchema", "true")
-        .csv(s3_input_path)
-    )
+    if total_rows == 0:
+        df.unpersist()
 
-elif file_ext == "json":
-    df = (
-        spark.read
-        .option("multiLine", "true")
-        .json(s3_input_path)
-    )
-
-elif file_ext == "parquet":
-    df = spark.read.parquet(s3_input_path)
-
-else:
-    raise Exception(f"Unsupported structured file type: {file_ext}")
-
-
-for old_col in df.columns:
-    df = df.withColumnRenamed(old_col, clean_column_name(old_col))
-
-for field in df.schema.fields:
-    if field.dataType.simpleString() == "string":
-        df = df.withColumn(
-            field.name,
-            trim(col(field.name))
+        raise ValueError(
+            f"File '{source_file_name}' has zero rows after cleaning."
         )
 
-df = df.dropna(how="all")
-df = df.dropDuplicates()
-df = validate_data_quality(df, file_name)
+    null_expressions = [
+        spark_sum(
+            when(col(field.name).isNull(), 1).otherwise(0)
+        ).alias(field.name)
+        for field in df.schema.fields
+    ]
 
-df = df.withColumn(
-    "user_id",
-    lit(int(user_id)).cast(IntegerType())
-)
+    if null_expressions:
+        null_counts_row = df.agg(*null_expressions).first()
 
-df = df.withColumn(
-    "document_id",
-    lit(int(document_id)).cast(IntegerType())
-)
+        for field in df.schema.fields:
+            null_count = null_counts_row[field.name] or 0
+            null_percentage = null_count / total_rows
 
-df = df.withColumn("source_file_name", lit(file_name))
-df = df.withColumn("processed_at", current_timestamp())
+            if null_percentage > 0.90:
+                print(
+                    "[WARNING] "
+                    f"Column '{field.name}' is "
+                    f"{null_percentage * 100:.0f}% null."
+                )
 
-row_count = df.count()
+    print(
+        f"[glue] Data quality validation passed: "
+        f"{total_rows} rows."
+    )
 
-print("Rows:", row_count)
-print("Columns:", len(df.columns))
-print("Column Names:", df.columns)
-
-print("Final Schema:")
-df.printSchema()
-
-jdbc_url = f"jdbc:postgresql://{pg_host}:{pg_port}/{pg_db}"
-
-print("Writing to RDS PostgreSQL...")
-print("JDBC URL:", jdbc_url)
-print("Table:", table_name)
-
-(
-    df.write
-    .format("jdbc")
-    .option("url", jdbc_url)
-    .option("dbtable", table_name)
-    .option("user", pg_user)
-    .option("password", pg_password)
-    .option("driver", "org.postgresql.Driver")
-    .mode("overwrite")
-    .save()
-)
+    return df, total_rows
 
 
-print("Glue ETL completed successfully")
-print("Input:", s3_input_path)
-print("RDS table:", table_name)
-print("Rows processed:", row_count)
+# ---------------------------------------------------------------------------
+# Iceberg write
+# ---------------------------------------------------------------------------
+
+def write_to_iceberg(
+    df: DataFrame,
+    identifier: str,
+) -> None:
+    """
+    Create or atomically replace one Iceberg table for the uploaded dataset.
+
+    Each uploaded document has its own unique table name:
+        u{user_id}_d{document_id}_{dataset_name}
+    """
+    print(f"[glue] Writing Iceberg table: {identifier}")
+
+    (
+        df.writeTo(identifier)
+        .using("iceberg")
+        .tableProperty("format-version", "2")
+        .tableProperty(
+            "write.parquet.compression-codec",
+            "snappy",
+        )
+        .createOrReplace()
+    )
+
+    print(f"[glue] Iceberg write completed: {identifier}")
+
+
+# ---------------------------------------------------------------------------
+# Main job
+# ---------------------------------------------------------------------------
+
+try:
+    print("=" * 70)
+    print("[glue] Starting structured Lakehouse ETL")
+    print(f"[glue] Job name: {job_name}")
+    print(f"[glue] Input path: {s3_input_path}")
+    print(f"[glue] User ID: {user_id}")
+    print(f"[glue] Document ID: {document_id}")
+    print(f"[glue] Source file: {file_name}")
+    print(f"[glue] Iceberg database: {iceberg_database}")
+    print(f"[glue] Iceberg table: {table_name}")
+    print(f"[glue] Iceberg warehouse: {iceberg_warehouse}")
+    print(f"[glue] Full table identifier: {table_identifier}")
+    print("=" * 70)
+
+    source_df = read_structured_file(s3_input_path)
+
+    cleaned_df = clean_dataframe(source_df)
+
+    cleaned_df, source_row_count = validate_data_quality(
+        cleaned_df,
+        file_name,
+    )
+
+    final_df = (
+        cleaned_df
+        .withColumn(
+            "user_id",
+            lit(user_id).cast(IntegerType()),
+        )
+        .withColumn(
+            "document_id",
+            lit(document_id).cast(IntegerType()),
+        )
+        .withColumn(
+            "source_file_name",
+            lit(file_name),
+        )
+        .withColumn(
+            "processed_at",
+            current_timestamp(),
+        )
+    )
+
+    final_column_count = len(final_df.columns)
+
+    print(f"[glue] Source rows: {source_row_count}")
+    print(f"[glue] Final column count: {final_column_count}")
+    print(f"[glue] Final columns: {final_df.columns}")
+    print("[glue] Final schema:")
+
+    final_df.printSchema()
+
+    write_to_iceberg(
+        final_df,
+        table_identifier,
+    )
+
+    # Verify that Spark can read the table through Glue Catalog.
+    verification_count = spark.table(table_identifier).count()
+
+    if verification_count != source_row_count:
+        raise RuntimeError(
+            "Iceberg verification failed. "
+            f"Expected {source_row_count} rows but found "
+            f"{verification_count} rows."
+        )
+
+    print("=" * 70)
+    print("[glue] Structured Lakehouse ETL completed successfully")
+    print(f"[glue] Input: {s3_input_path}")
+    print(f"[glue] Catalog table: {table_identifier}")
+    print(f"[glue] Rows written: {verification_count}")
+    print(f"[glue] Columns written: {final_column_count}")
+    print("=" * 70)
+
+    cleaned_df.unpersist()
+    job.commit()
+
+except Exception as error:
+    print("=" * 70)
+    print("[glue] Structured Lakehouse ETL failed")
+    print(f"[glue] Error type: {type(error).__name__}")
+    print(f"[glue] Error: {error}")
+    print("=" * 70)
+
+    raise
