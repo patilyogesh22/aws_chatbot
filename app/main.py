@@ -13,6 +13,7 @@ from app.routes import history
 from app.routes import stats
 from app.routes import internal_dbt
 from app.middleware.logging import log_requests
+from app.routes.athena_test import router as athena_test_router
 
 app = FastAPI(
     title="RAG Chatbot API Authenticated",
@@ -38,6 +39,10 @@ app.include_router(history.router)
 app.include_router(stats.router)
 app.include_router(internal_dbt.router)
 
+app.include_router(
+    athena_test_router,
+    prefix="/api",
+)
 
 @app.on_event("startup")
 def on_startup():
