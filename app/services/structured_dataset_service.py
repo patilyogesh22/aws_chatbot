@@ -86,6 +86,7 @@ def get_user_iceberg_dataset(
             f"Iceberg metadata is missing for '{file_name}'."
         )
 
+
     return {
         "document_id": document_id,
         "file_name": stored_file_name,
