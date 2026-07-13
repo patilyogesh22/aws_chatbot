@@ -101,7 +101,19 @@ const STATUS_ICONS = {
   error:                  { icon: '❌', label: 'Failed',            cls: 'status-error'    },
   sqs_failed:             { icon: '❌', label: 'Queue Failed',      cls: 'status-error'    },
   not_found:              { icon: '❓', label: 'Unknown',           cls: 'status-unknown'  },
+  completed: {
+    icon: '✅',
+    label: 'Completed',
+    cls: 'status-ready'
+  },
+
+  iceberg_ready: {
+      icon: '🧊',
+      label: 'Iceberg Ready',
+      cls: 'status-ready'
+  },
 };
+
 
 async function fetchFileStatus(fileName) {
   const { data } = await apiGet(`/structured/status/${encodeURIComponent(fileName)}`);
@@ -145,9 +157,15 @@ function startStatusPolling(fileName) {
     }
 
     // Show toast when ready
-    if (data.status === 'ready' || data.status === 'error') {
+      const READY_STATUSES = [
+          'ready',
+          'completed',
+          'iceberg_ready'
+      ];
+
+      if (READY_STATUSES.includes(data.status) || data.status === 'error') {
       stopStatusPolling(fileName);
-      if (data.status === 'ready') {
+      if (READY_STATUSES.includes(data.status)) {
         toast(`✅ ${fileName} is ready! You can now ask questions.`, 'success');
         // If this file is currently selected, update filter banner
         if (state.selectedFile === fileName) {
@@ -471,7 +489,11 @@ function renderFiles(files) {
     state.fileStatuses[f.name] = {
       ...(state.fileStatuses[f.name] || {}),
       status: rawStatus,
-      ready: rawStatus === 'ready',
+      ready: [
+          'ready',
+          'completed',
+          'iceberg_ready'
+      ].includes(rawStatus),
       message: f.processing_error || '',
       row_count: f.row_count || null,
     };
