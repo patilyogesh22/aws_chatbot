@@ -114,18 +114,10 @@ def delete_file(
     )
 
     if not result:
-        raise HTTPException(
-            status_code=404,
-            detail="File not found",
-        )
-
-    if result.get("status") == "partial_failed":
-        raise HTTPException(
-            status_code=502,
-            detail=result,
-        )
+        raise HTTPException(status_code=404, detail="File not found")
 
     return result
+
 
 @router.get("/structured/status/{file_name}")
 def structured_status(

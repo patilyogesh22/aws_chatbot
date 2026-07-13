@@ -396,10 +396,7 @@ def _process_upload_content(
                 event_status="sqs_queued",
             )
 
-            next_step = (
-                "SQS → EventBridge Pipe → Step Functions → "
-                "Prepare Lambda → Glue PySpark → Iceberg → Glue Catalog → Athena"
-            )
+            next_step = "SQS → EventBridge Pipe → Step Functions → Glue Job → RDS table → NL-to-SQL"
             message = "Structured file uploaded successfully and sent to SQS for processing."
         else:
             update_processing_status(
