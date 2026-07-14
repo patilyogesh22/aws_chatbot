@@ -1,14 +1,15 @@
 import os
 import io
 import hashlib
-
+import re
+from pathlib import Path
 from fastapi import APIRouter, File, UploadFile, HTTPException, Depends
 
 from app.db import get_db_connection
 from app.auth import get_current_user
 from app.utils.file_classifier import classify_file
 from app.utils.structured_converter import convert_excel_to_csv
-from app.services.queue_service import send_file_to_queue, clean_table_name
+from app.services.queue_service import send_file_to_queue
 from aws.s3_ingestion import upload_fileobj_to_s3
 
 
@@ -16,6 +17,12 @@ router = APIRouter()
 
 SUPPORTED_MESSAGE = "Unsupported file type. Supported: CSV, Excel, JSON, PDF, DOCX, TXT, MD, PPTX"
 
+def clean_dataset_name(file_name: str) -> str:
+    name = Path(file_name).stem.lower()
+    name = re.sub(r"[^a-z0-9_]", "_", name)
+    name = re.sub(r"_+", "_", name).strip("_")
+
+    return name or "dataset"
 def is_internal_lakehouse_file(filename: str) -> bool:
     lower_name = filename.lower()
 
@@ -200,7 +207,18 @@ def _process_upload_content(
     raise_on_duplicate: bool = True,
 ):
     file_size = len(content)
+    if not filename:
+        if raise_on_duplicate:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded file must have a filename",
+            )
 
+        return {
+            "status": "error",
+            "file": "unknown",
+            "message": "Uploaded file must have a filename",
+        }
     if file_size == 0:
         if raise_on_duplicate:
             raise HTTPException(status_code=400, detail="Uploaded file is empty")
@@ -324,7 +342,7 @@ def _process_upload_content(
             document_id = cur.fetchone()[0]
 
     if file_type == "structured":
-        dataset_name = clean_table_name(original_filename)
+        dataset_name = clean_dataset_name(original_filename)
         table_name = f"u{user_id}_d{document_id}_{dataset_name}"
     else:
         dataset_name = None
@@ -377,7 +395,7 @@ def _process_upload_content(
                 ))
 
     try:
-        sqs_message_id, dataset_name, table_name = send_file_to_queue(
+        sqs_message_id = send_file_to_queue(
             user_id=user_id,
             document_id=document_id,
             file_name=original_filename,
@@ -385,6 +403,8 @@ def _process_upload_content(
             s3_bucket=s3_bucket,
             s3_key=s3_key,
             file_size=file_size,
+            dataset_name=dataset_name,
+            table_name=table_name,
         )
 
         if file_type == "structured":
@@ -396,7 +416,11 @@ def _process_upload_content(
                 event_status="sqs_queued",
             )
 
-            next_step = "SQS → EventBridge Pipe → Step Functions → Glue Job → RDS table → NL-to-SQL"
+            next_step = (
+                "SQS → EventBridge Pipe → Step Functions → "
+                "Prepare Lambda → Glue PySpark → Apache Iceberg → "
+                "Glue Catalog → Athena"
+            )
             message = "Structured file uploaded successfully and sent to SQS for processing."
         else:
             update_processing_status(
@@ -557,7 +581,9 @@ async def retry_queue_document(
                         d.s3_key,
                         d.file_size,
                         COALESCE(d.processing_status, '') AS document_status,
-                        COALESCE(sd.status, '') AS structured_status
+                        COALESCE(sd.status, '') AS structured_status,
+                        sd.dataset_name,
+                        sd.table_name
                     FROM app_documents d
                     LEFT JOIN structured_datasets sd
                       ON sd.document_id = d.id
@@ -575,7 +601,18 @@ async def retry_queue_document(
         if not row:
             raise HTTPException(status_code=404, detail="Document not found")
 
-        _, user_id, file_name, file_type, s3_key, file_size, old_doc_status, old_structured_status = row
+        (
+            _,
+            user_id,
+            file_name,
+            file_type,
+            s3_key,
+            file_size,
+            old_doc_status,
+            old_structured_status,
+            dataset_name,
+            table_name,
+        ) = row
 
         if file_type not in {"structured", "unstructured"}:
             raise HTTPException(
@@ -583,7 +620,19 @@ async def retry_queue_document(
                 detail="Retry queue is only for structured and unstructured files currently"
             )
 
-        sqs_message_id, dataset_name, table_name = send_file_to_queue(
+        if file_type == "structured":
+            if not dataset_name:
+                dataset_name = clean_dataset_name(file_name)
+
+            if not table_name:
+                table_name = (
+                    f"u{user_id}_d{document_id}_{dataset_name}"
+                )
+        else:
+            dataset_name = None
+            table_name = None
+            
+        sqs_message_id = send_file_to_queue(
             user_id=user_id,
             document_id=document_id,
             file_name=file_name,
@@ -591,6 +640,8 @@ async def retry_queue_document(
             s3_bucket=s3_bucket,
             s3_key=s3_key,
             file_size=file_size or 0,
+            dataset_name=dataset_name,
+            table_name=table_name,
         )
 
         if file_type == "structured":

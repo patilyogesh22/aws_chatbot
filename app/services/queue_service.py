@@ -1,21 +1,16 @@
 import json
 import os
-import re
-from pathlib import Path
 
 import boto3
+
 
 AWS_REGION = os.getenv("AWS_REGION", "eu-north-1")
 SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL")
 
-sqs_client = boto3.client("sqs", region_name=AWS_REGION)
-
-
-def clean_table_name(name: str):
-    name = Path(name).stem.lower()
-    name = re.sub(r"[^a-z0-9_]", "_", name)
-    name = re.sub(r"_+", "_", name)
-    return name.strip("_")
+sqs_client = boto3.client(
+    "sqs",
+    region_name=AWS_REGION,
+)
 
 
 def send_file_to_queue(
@@ -27,10 +22,29 @@ def send_file_to_queue(
     s3_bucket: str,
     s3_key: str,
     file_size: int,
-):
+    dataset_name: str | None = None,
+    table_name: str | None = None,
+) -> str:
+    """Send one file-processing message to Amazon SQS."""
+
+    if not SQS_QUEUE_URL:
+        raise RuntimeError("SQS_QUEUE_URL is not configured")
+
+    if file_type not in {"structured", "unstructured"}:
+        raise ValueError(
+            "file_type must be 'structured' or 'unstructured'"
+        )
+
     if file_type == "structured":
-        dataset_name = clean_table_name(file_name)
-        table_name = f"u{user_id}_d{document_id}_{dataset_name}"
+        if not dataset_name:
+            raise ValueError(
+                "dataset_name is required for structured files"
+            )
+
+        if not table_name:
+            raise ValueError(
+                "table_name is required for structured files"
+            )
     else:
         dataset_name = None
         table_name = None
@@ -53,4 +67,9 @@ def send_file_to_queue(
         MessageBody=json.dumps(message),
     )
 
-    return response["MessageId"], dataset_name, table_name
+    message_id = response.get("MessageId")
+
+    if not message_id:
+        raise RuntimeError("SQS did not return a MessageId")
+
+    return message_id

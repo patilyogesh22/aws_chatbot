@@ -3,7 +3,6 @@ import os
 import re
 from pathlib import Path
 from typing import Any
-
 import psycopg2
 
 
@@ -91,6 +90,17 @@ def validate_event(event: dict[str, Any]) -> None:
             "This Lambda accepts only structured files"
         )
 
+def validate_iceberg_configuration() -> None:
+    if not ICEBERG_DATABASE:
+        raise RuntimeError("ICEBERG_DATABASE is not configured")
+
+    if not ICEBERG_WAREHOUSE:
+        raise RuntimeError("ICEBERG_WAREHOUSE is not configured")
+
+    if not ICEBERG_WAREHOUSE.startswith("s3://"):
+        raise RuntimeError(
+            "ICEBERG_WAREHOUSE must be a valid s3:// URI"
+        )
 
 def document_exists(
     *,
@@ -209,11 +219,14 @@ def update_processing_metadata(
         conn.commit()
 
 
+
 def lambda_handler(event, context):
     print("Structured preparation event:")
     print(json.dumps(event, default=str))
 
     validate_event(event)
+
+    validate_iceberg_configuration()
 
     user_id = int(event["user_id"])
     document_id = int(event["document_id"])
@@ -229,16 +242,15 @@ def lambda_handler(event, context):
             f"document_id={document_id}"
         )
 
-    dataset_name = (
-        event.get("dataset_name")
-        or clean_name(file_name)
-    )
 
-    table_name = (
-        event.get("table_name")
-        or f"u{user_id}_d{document_id}_{dataset_name}"
-    )
+    dataset_name = event.get("dataset_name")
+    table_name = event.get("table_name")
 
+    if not dataset_name:
+        dataset_name = clean_name(file_name)
+
+    if not table_name:
+        table_name = f"u{user_id}_d{document_id}_{dataset_name}"
     iceberg_database = ICEBERG_DATABASE.strip().lower()
     iceberg_warehouse = ICEBERG_WAREHOUSE.rstrip("/") + "/"
 
