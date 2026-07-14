@@ -71,7 +71,7 @@ spark = glue_context.spark_session
 job = Job(glue_context)
 job.init(job_name, args)
 
-spark.conf.set("spark.sql.shuffle.partitions", "10")
+spark.conf.set("spark.sql.shuffle.partitions", "5")
 spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
 
 # These settings are also passed through the Glue job's --conf parameter.
