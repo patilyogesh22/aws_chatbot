@@ -42,11 +42,6 @@ def internal_run_dbt(x_internal_api_key: str = Header(None)):
         send_metric("DBTRunFailed", 1)
         raise
 
-class StructuredReadyRequest(BaseModel):
-    user_id: int
-    document_id: int
-    table_name: str
-    status: str = "ready"
 
 class DocumentErrorRequest(BaseModel):
     user_id: int
